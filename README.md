@@ -1,1 +1,1 @@
-# Accelerating-Digital-Verification-Using-AI-Based-Constrained-Stimulus-Generation
+# Accelerating_Digital_Verification_Using_AI-Based_Constrained_Stimulus_Generation
