@@ -1,0 +1,339 @@
+QuestaSim-64 vcover 2024.1 Coverage Utility 2024.02 Feb  1 2024
+Start time: 14:27:12 on Oct 13,2026
+vcover report -cvg -details -nocompactcrossbins F_lean_100cyc.ucdb 
+Support of the MGLS_LICENSE_FILE and LM_LICENSE_FILE licensing environment variables will be discontinued starting with the 2025.1 release. Please update to using the SALT_LICENSE_SERVER variable.
+Please contact Siemens EDA Customer Support (https://support.sw.siemens.com/) for assistance.
+Coverage Report by instance with details
+
+=================================================================================
+=== Instance: /FIFO_coverage_pkg
+=== Design Unit: work.FIFO_coverage_pkg
+=================================================================================
+
+Covergroup Coverage:
+    Covergroups                      1        na        na    69.73%
+        Coverpoints/Crosses         16        na        na        na
+            Covergroup Bins         64        36        28    56.25%
+----------------------------------------------------------------------------------------------------------
+Covergroup                                             Metric       Goal    Status               
+                                                                                                         
+----------------------------------------------------------------------------------------------------------
+ TYPE /FIFO_coverage_pkg/FIFO_coverage/cg_FIFO         69.73%        100    Uncovered            
+    covered/total bins:                                    36         64                      
+    missing/total bins:                                    28         64                      
+    % Hit:                                             56.25%        100                      
+    Coverpoint cp_wr_en                               100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                         1          1    Covered              
+        bin auto[1]                                        99          1    Covered              
+    Coverpoint cp_rd_en                                50.00%        100    Uncovered            
+        covered/total bins:                                 1          2                      
+        missing/total bins:                                 1          2                      
+        % Hit:                                         50.00%        100                      
+        bin auto[0]                                       100          1    Covered              
+        bin auto[1]                                         0          1    ZERO                 
+    Coverpoint cp_wr_ack                              100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        27          1    Covered              
+        bin auto[1]                                        73          1    Covered              
+    Coverpoint cp_overflow                            100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        74          1    Covered              
+        bin auto[1]                                        26          1    Covered              
+    Coverpoint cp_full                                100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        74          1    Covered              
+        bin auto[1]                                        26          1    Covered              
+    Coverpoint cp_empty                               100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        89          1    Covered              
+        bin auto[1]                                        11          1    Covered              
+    Coverpoint cp_almostfull                          100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        94          1    Covered              
+        bin auto[1]                                         6          1    Covered              
+    Coverpoint cp_almostempty                         100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        89          1    Covered              
+        bin auto[1]                                        11          1    Covered              
+    Coverpoint cp_underflow                            50.00%        100    Uncovered            
+        covered/total bins:                                 1          2                      
+        missing/total bins:                                 1          2                      
+        % Hit:                                         50.00%        100                      
+        bin auto[0]                                       100          1    Covered              
+        bin auto[1]                                         0          1    ZERO                 
+    Cross cx_wr_ack                                    60.00%        100    Uncovered            
+        covered/total bins:                                 3          5                      
+        missing/total bins:                                 2          5                      
+        % Hit:                                         60.00%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                  73          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  26          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[1],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+        Illegal and Ignore Bins:
+            ignore_bin auto_wr_ack_2                        0               ZERO                 
+            ignore_bin auto_wr_ack_1                        0               ZERO                 
+            ignore_bin auto_wr_ack_0                        0               ZERO                 
+    Cross cx_overflow                                  60.00%        100    Uncovered            
+        covered/total bins:                                 3          5                      
+        missing/total bins:                                 2          5                      
+        % Hit:                                         60.00%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                  26          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  73          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+        Illegal and Ignore Bins:
+            ignore_bin auto_overflow_2                      0               ZERO                 
+            ignore_bin auto_overflow_1                      0               ZERO                 
+            ignore_bin auto_overflow_0                      0               ZERO                 
+    Cross cx_full                                      50.00%        100    Uncovered            
+        covered/total bins:                                 3          6                      
+        missing/total bins:                                 3          6                      
+        % Hit:                                         50.00%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                  26          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  73          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[0],auto[0],auto[1]>                   0          1    ZERO                 
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+        Illegal and Ignore Bins:
+            ignore_bin auto_full_1                          0               ZERO                 
+            ignore_bin auto_full_0                          0               ZERO                 
+    Cross cx_empty                                     37.50%        100    Uncovered            
+        covered/total bins:                                 3          8                      
+        missing/total bins:                                 5          8                      
+        % Hit:                                         37.50%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                  10          1    Covered              
+            bin <auto[0],auto[0],auto[1]>                   1          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  89          1    Covered              
+            bin <auto[1],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[0],auto[0]>                   0          1    ZERO                 
+    Cross cx_almostfull                                37.50%        100    Uncovered            
+        covered/total bins:                                 3          8                      
+        missing/total bins:                                 5          8                      
+        % Hit:                                         37.50%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                   6          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  93          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[1],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[0],auto[1]>                   0          1    ZERO                 
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+    Cross cx_almostempty                               37.50%        100    Uncovered            
+        covered/total bins:                                 3          8                      
+        missing/total bins:                                 5          8                      
+        % Hit:                                         37.50%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                  11          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  88          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[1],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[0],auto[1]>                   0          1    ZERO                 
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+    Cross cx_underflow                                 33.33%        100    Uncovered            
+        covered/total bins:                                 2          6                      
+        missing/total bins:                                 4          6                      
+        % Hit:                                         33.33%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[0]>                  99          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[1],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+        Illegal and Ignore Bins:
+            ignore_bin auto_underflow_1                     0               ZERO                 
+            ignore_bin auto_underflow_0                     0               ZERO                 
+
+COVERGROUP COVERAGE:
+----------------------------------------------------------------------------------------------------------
+Covergroup                                             Metric       Goal    Status               
+                                                                                                         
+----------------------------------------------------------------------------------------------------------
+ TYPE /FIFO_coverage_pkg/FIFO_coverage/cg_FIFO         69.73%        100    Uncovered            
+    covered/total bins:                                    36         64                      
+    missing/total bins:                                    28         64                      
+    % Hit:                                             56.25%        100                      
+    Coverpoint cp_wr_en                               100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                         1          1    Covered              
+        bin auto[1]                                        99          1    Covered              
+    Coverpoint cp_rd_en                                50.00%        100    Uncovered            
+        covered/total bins:                                 1          2                      
+        missing/total bins:                                 1          2                      
+        % Hit:                                         50.00%        100                      
+        bin auto[0]                                       100          1    Covered              
+        bin auto[1]                                         0          1    ZERO                 
+    Coverpoint cp_wr_ack                              100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        27          1    Covered              
+        bin auto[1]                                        73          1    Covered              
+    Coverpoint cp_overflow                            100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        74          1    Covered              
+        bin auto[1]                                        26          1    Covered              
+    Coverpoint cp_full                                100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        74          1    Covered              
+        bin auto[1]                                        26          1    Covered              
+    Coverpoint cp_empty                               100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        89          1    Covered              
+        bin auto[1]                                        11          1    Covered              
+    Coverpoint cp_almostfull                          100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        94          1    Covered              
+        bin auto[1]                                         6          1    Covered              
+    Coverpoint cp_almostempty                         100.00%        100    Covered              
+        covered/total bins:                                 2          2                      
+        missing/total bins:                                 0          2                      
+        % Hit:                                        100.00%        100                      
+        bin auto[0]                                        89          1    Covered              
+        bin auto[1]                                        11          1    Covered              
+    Coverpoint cp_underflow                            50.00%        100    Uncovered            
+        covered/total bins:                                 1          2                      
+        missing/total bins:                                 1          2                      
+        % Hit:                                         50.00%        100                      
+        bin auto[0]                                       100          1    Covered              
+        bin auto[1]                                         0          1    ZERO                 
+    Cross cx_wr_ack                                    60.00%        100    Uncovered            
+        covered/total bins:                                 3          5                      
+        missing/total bins:                                 2          5                      
+        % Hit:                                         60.00%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                  73          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  26          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[1],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+        Illegal and Ignore Bins:
+            ignore_bin auto_wr_ack_2                        0               ZERO                 
+            ignore_bin auto_wr_ack_1                        0               ZERO                 
+            ignore_bin auto_wr_ack_0                        0               ZERO                 
+    Cross cx_overflow                                  60.00%        100    Uncovered            
+        covered/total bins:                                 3          5                      
+        missing/total bins:                                 2          5                      
+        % Hit:                                         60.00%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                  26          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  73          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+        Illegal and Ignore Bins:
+            ignore_bin auto_overflow_2                      0               ZERO                 
+            ignore_bin auto_overflow_1                      0               ZERO                 
+            ignore_bin auto_overflow_0                      0               ZERO                 
+    Cross cx_full                                      50.00%        100    Uncovered            
+        covered/total bins:                                 3          6                      
+        missing/total bins:                                 3          6                      
+        % Hit:                                         50.00%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                  26          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  73          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[0],auto[0],auto[1]>                   0          1    ZERO                 
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+        Illegal and Ignore Bins:
+            ignore_bin auto_full_1                          0               ZERO                 
+            ignore_bin auto_full_0                          0               ZERO                 
+    Cross cx_empty                                     37.50%        100    Uncovered            
+        covered/total bins:                                 3          8                      
+        missing/total bins:                                 5          8                      
+        % Hit:                                         37.50%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                  10          1    Covered              
+            bin <auto[0],auto[0],auto[1]>                   1          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  89          1    Covered              
+            bin <auto[1],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[0],auto[0]>                   0          1    ZERO                 
+    Cross cx_almostfull                                37.50%        100    Uncovered            
+        covered/total bins:                                 3          8                      
+        missing/total bins:                                 5          8                      
+        % Hit:                                         37.50%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                   6          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  93          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[1],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[0],auto[1]>                   0          1    ZERO                 
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+    Cross cx_almostempty                               37.50%        100    Uncovered            
+        covered/total bins:                                 3          8                      
+        missing/total bins:                                 5          8                      
+        % Hit:                                         37.50%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[1]>                  11          1    Covered              
+            bin <auto[1],auto[0],auto[0]>                  88          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[1],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[0],auto[1]>                   0          1    ZERO                 
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+    Cross cx_underflow                                 33.33%        100    Uncovered            
+        covered/total bins:                                 2          6                      
+        missing/total bins:                                 4          6                      
+        % Hit:                                         33.33%        100                      
+        Auto, Default and User Defined Bins:
+            bin <auto[1],auto[0],auto[0]>                  99          1    Covered              
+            bin <auto[0],auto[0],auto[0]>                   1          1    Covered              
+            bin <auto[1],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[1]>                   0          1    ZERO                 
+            bin <auto[1],auto[1],auto[0]>                   0          1    ZERO                 
+            bin <auto[0],auto[1],auto[0]>                   0          1    ZERO                 
+        Illegal and Ignore Bins:
+            ignore_bin auto_underflow_1                     0               ZERO                 
+            ignore_bin auto_underflow_0                     0               ZERO                 
+
+TOTAL COVERGROUP COVERAGE: 69.73%  COVERGROUP TYPES: 1
+
+Total Coverage By Instance (filtered view): 69.73%
+
+End time: 14:27:12 on Oct 13,2026, Elapsed time: 0:00:00
+Errors: 0, Warnings: 0

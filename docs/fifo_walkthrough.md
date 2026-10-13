@@ -468,7 +468,7 @@ Because nothing carries over between runs except which boxes are ticked, this is
 | 7 | **DQN**: MLP 87 → 128 → 128 → 22, replay buffer 10k, batch 64, Adam lr 1e-3, γ ≈ 0.9, ε 1.0 → 0.05, target sync every ~200 steps, Huber loss | First learning agent | No |
 | 8 | **DDQN** upgrade | More stable Q-values | No |
 | 9 | Compare agent vs random on the fake env: runs-to-100%, area under the coverage curve | First results + plots | No |
-| 10 | Questa runner + report parser (`subprocess` → `vsim`/`vcover` → 64-bin vector). Testable now using `run <N>us` and saved reports | Bridge to the real simulator | Yes |
+| 10 | Questa runner + report parser (`subprocess` → `vsim`/`vcover` → 64-bin vector). Testable now using `run <N>us` and saved reports — **parser done 2026-10-13** (`questa/report_parser.py`, tested on 4 real reports); the runner is still to do | Bridge to the real simulator | Yes |
 | 11 | `questa_env.py` once the RL test + plusargs exist; check fake vs real bins for each action | Real file-based loop | Yes (+ verification team) |
 | 12 | Final comparison on real Questa (runs and wall-clock time), logs and plots | Project results | Yes |
 
@@ -476,7 +476,7 @@ Because nothing carries over between runs except which boxes are ticked, this is
 - CSV per step: episode, step, action, new_bins, total_bins, epsilon, loss.
 - Plots: coverage vs runs (agent vs random, mean ± std over seeds), learning curve (episode return), action histogram (which scenarios the agent prefers).
 
-### Proposed folder structure (exists so far: `README.md`, `requirements.txt`, `pyproject.toml`, `fifo_rl/coverage_model.py`, `fifo_rl/state.py`, `tests/test_coverage_model.py`, `tests/test_state.py`)
+### Proposed folder structure (exists so far: `README.md`, `requirements.txt`, `pyproject.toml`, `fifo_rl/coverage_model.py`, `fifo_rl/state.py`, `fifo_rl/questa/report_parser.py`, `tests/test_coverage_model.py`, `tests/test_state.py`, `tests/test_report_parser.py`, `tests/fixtures/`)
 ```
 fifo_rl/
   requirements.txt

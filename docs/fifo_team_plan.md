@@ -91,7 +91,7 @@ Done when: DQN/DDQN beat the random-scenario baseline on the fake backend (runs-
 
 Tasks:
 1. `fifo_rl/questa/runner.py` — from WSL Python call the Windows tools (`vlib.exe`, `vlog.exe -F`, `vsim.exe -c -sv_seed …`, `vcover.exe report -cvg -details -nocompactcrossbins`); one run folder per run under `runs/` on `/mnt/d`; convert path arguments with `wslpath -w`. Keep tool names and paths in config (so a Linux Questa later = `vsim` instead of `vsim.exe`).
-2. `fifo_rl/questa/report_parser.py` + `tests/test_parser.py` — report text → Contract A vector. Save 2–3 real reports as test fixtures. Remember: the report lists the covergroup **twice** — parse only the first block.
+2. `fifo_rl/questa/report_parser.py` + `tests/test_report_parser.py` — **already written (2026-10-13), with 4 real reports in `tests/fixtures/` — don't rewrite it; pull `FIFO_RL_dev` to get it.** Use `hits_vector(report_text)` → Contract A vector (64 true/false). It raises `ReportError` if the report was made without `-nocompactcrossbins` or has no `cg_FIFO` bins.
 3. Produce the `+UVM_VERBOSITY=UVM_HIGH` log Member 1 needs (no testbench change required).
 4. **Verification-team link:** send them the 6 requests (`fifo_agent_context.md` §7) — most importantly: command-line knobs (`+WR_PCT`, `+RD_PCT`, `+RST_PCT`, length / scenario), an RL test that always starts with a reset and runs only the chosen scenario, coverage save **without** `-du FIFO`. Agree the exact plusarg names with them.
 5. `fifo_rl/backends/questa_backend.py` — Contract C, once their RL test exists. Until then, a temporary version using `run <N>us` + seed is enough to test the plumbing.
