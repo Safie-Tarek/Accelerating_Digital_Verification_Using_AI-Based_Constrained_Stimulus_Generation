@@ -1,0 +1,22 @@
+# FIFO_RL_dev tracks only the FIFO pilot. Everything else at the repo root is ignored
+# (CLAUDE.md, docs/, the iDMA folders, PDFs, ...).
+/*
+!/.gitignore
+!/README.md
+!/README_FIFO_UVM.md
+!/FIFO Plan.xlsx
+!/src codes/
+!/fifo_rl/
+
+# Python + run artefacts
+__pycache__/
+*.pyc
+.pytest_cache/
+/fifo_rl/runs/
+
+# Questa artefacts, in case someone simulates inside src codes/
+/src codes/work/
+/src codes/transcript
+/src codes/*.ucdb
+/src codes/*.wlf
+/src codes/certe_dump.xml
