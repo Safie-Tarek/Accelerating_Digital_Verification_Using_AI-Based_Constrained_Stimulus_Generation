@@ -1,6 +1,6 @@
 # FIFO RL Agent — Technical Context (team copy)
 
-> The AI team's shared working notes. It holds everything the DQN agent needs from the FIFO testbench in `src codes/` and `FIFO Plan.xlsx`. For a gentler, step-by-step explanation read [`fifo_walkthrough.md`](fifo_walkthrough.md); for who builds what, read [`fifo_team_plan.md`](fifo_team_plan.md). Last updated: 2026-10-13.
+> The AI team's shared working notes. It holds everything the DQN agent needs from the FIFO testbench in `src codes/` and `FIFO Plan.xlsx`. For a gentler, step-by-step explanation read [`fifo_walkthrough.md`](fifo_walkthrough.md); for who builds what, read [`fifo_team_plan.md`](fifo_team_plan.md). Last updated: 2026-10-14.
 
 ## Project Context
 - Graduation project with Siemens DISW: use a Reinforcement Learning agent to steer stimulus generation toward uncovered functional-coverage bins, so coverage closes in fewer simulation runs than plain constrained-random verification.
@@ -79,7 +79,7 @@ Missing (must be added by verification team):
 
 **Key constraint: FIFO state does NOT carry over between runs.** Each run = fresh simulation = reset → count 0. So an action must be a *self-contained scenario* that first reaches the target fill level and then applies the pattern, inside the same run. (A plain "wr+rd 100%" run from empty just sits at count 1 and never sees full.)
 
-Proposed action space (pending Mohamed's OK) — action = (target level L, pattern P), run = `reset → fill to L → apply P for K cycles`:
+Action space (implemented 2026-10-14 in `fifo_rl/actions.py`; K = 10, `reset_with_traffic` 16 cycles, `baseline_random` 18 cycles; still pending Mohamed's final OK) — action = (target level L, pattern P), run = `reset → fill to L → apply P for K cycles`:
 - L ∈ {0 (empty), 1 (almostempty), 7 (almostfull), 8 (full)}
 - P ∈ {idle (0/0), write-only (100/0), read-only (0/100), write+read (100/100), random mix (50/50)}
 - → 4 × 5 = 20 scenario actions, plus:
@@ -102,10 +102,10 @@ Sampled once per clock from the monitor. 9 coverpoints (auto bins 0/1 → 18 bin
 | cx_almostempty | 8 | – | needs count 1 with every wr/rd combo |
 | cx_underflow | 6 | (1,0,1),(0,0,1) | (1,1,1) reachable **only during a reset cycle** |
 
-Proposed RL interface (pending Mohamed's OK):
-- **State** = 64 bin-hit flags (0/1, cumulative over the episode) + one-hot last action + remaining budget (normalized). Optionally the 16 item percentages and the 17 SVA cover directives.
-- **Reward** = number of newly hit bins after the run (or Δ coverage %), small negative cost per run; optional bonus when reaching 100%.
-- **Episode** = a budget of N simulation runs; cumulative coverage via `vcover merge` of per-run UCDBs (or tracked in Python from per-run reports).
+RL interface (implemented 2026-10-14; reward still pending team approval):
+- **State** (`state.py`) = 64 bin-hit flags (0/1, cumulative over the episode) + remaining budget (normalized) + one-hot last action = 87 floats. Possible later extras: the 16 item percentages and the 17 SVA cover directives.
+- **Reward** (`reward.py`) = (new bins − 1 + 10·[this run closed 64/64]) / 64. `LEGACY_REWARD` keeps the first idea (new bins − 0.1). See §9 for why.
+- **Episode** (`envs/coverage_env.py`) = a budget of N simulation runs (train 20, evaluate 40); cumulative coverage is tracked in Python by OR-ing per-run bin vectors (no `vcover merge` needed).
 
 ## 5. Running the simulation (original `run.do`, for reference)
 ```
@@ -169,7 +169,9 @@ For the agent: FIFO_4 is the **constrained-random baseline** to beat; the plan's
 5. Optional: add a `rst_n` coverpoint (plan item FIFO_1).
 6. Discuss a richer coverage model (current `cg_FIFO` closes in ~500 random cycles).
 
-## 8. Build plan for the agent (proposed — steps 1, 2 and the parser half of step 10 are done, see "Code that exists" in section 9)
+## 8. Build plan for the agent (steps 1, 2, 3 (except the per-cycle replay), 4, 5 and the parser half of step 10 are done, see "Code that exists" in section 9)
+
+**Step 6 done (2026-10-14, 135 tests pass):** random action each run closes 84% within 40 runs (mean 21.6 runs when it closes); always-`baseline_random` closes 63%; a greedy agent that knows each action's hit odds closes 100% in ~5 runs (the headroom for the DQN). One long 70/30/10 run like FIFO_test closes in a median of 343 cycles (95% by 654), in line with Questa's 400–500. Hardest bins for random: the 3 reset-only bins (cx_empty <1,0,1>, <1,1,1>, cx_underflow <1,1,1>), hit almost only by `reset_with_traffic` (p ≈ 0.98–1.0 per run) which a random agent picks 1 run in 22. **Next to implement: step 7, the DQN**, evaluated with `evaluation.run_episodes`/`summarize`; target: get close to the ~5-run greedy figure. Original step-6 plan, for reference: step 6 — `fifo_rl/agents/random_agent.py`, `fifo_rl/utils/logger.py`, `scripts/evaluate.py`, `scripts/plot.py`: run (i) a uniform-random-action agent and (ii) an always-`baseline_random` (id 21) agent on `CoverageEnv(FakeBackend(), budget=40)` over ≥ 20 seeds; log runs-to-64/64, closure rate and coverage-vs-runs (mean ± std). Fake-env numbers so far for (i): budget 20 closes 39%, budget 40 closes 84%, mean ≈ 25 runs. In parallel: step 7 (DQN, now directly on the real env, no dummy env needed) and step 10's `questa/runner.py` (testable with `run <N>us`).
 Order (fake env first; real Questa only when the verification team delivers the RL test):
 0. Decisions: ~~Windows vs WSL Python~~ → WSL (decided); FIFO = pilot (b) or richer coverage (a); send requests (section 7) to verification team; install pip/venv in WSL.
 1. Project skeleton + venv + requirements.
@@ -182,20 +184,22 @@ Order (fake env first; real Questa only when the verification team delivers the 
 8. DDQN (online net picks argmax, target net evaluates) — one-line change.
 9. Compare on fake env: runs-to-100%, area under coverage curve.
 10. Questa runner + report parser (testable now with `run <N>us`; unit-test the parser on a saved report).
-11. `questa_env.py` once the RL test + plusargs exist; check fake vs real bins per action.
+11. `backends/questa_backend.py` (Contract C, same `CoverageEnv`) once the RL test + plusargs exist; check fake vs real bins per action.
 12. Final comparison on real Questa (runs and wall-clock); logs + plots.
 
-Proposed layout (top level `fifo_rl/`, next to `src codes/`):
+Layout (top level `fifo_rl/`, next to `src codes/`; ✔ = exists 2026-10-14). One env + swappable backends replaced the planned `fake_fifo_env.py` / `questa_env.py` pair:
 ```
 fifo_rl/
-  requirements.txt  README.md  configs/default.yaml
-  fifo_rl/coverage_model.py  actions.py
-  fifo_rl/envs/{base.py, fake_fifo_env.py, questa_env.py}
-  fifo_rl/questa/{runner.py, report_parser.py}
-  fifo_rl/agents/{random_agent.py, dqn.py}
-  fifo_rl/utils/logger.py
-  scripts/{train.py, evaluate.py, plot.py}
-  tests/{test_fake_fifo.py, test_parser.py}
+  requirements.txt ✔  README.md ✔  pyproject.toml ✔  configs/default.yaml
+  fifo_rl/{coverage_model.py ✔, state.py ✔, actions.py ✔, fake_fifo.py ✔, reward.py ✔}
+  fifo_rl/backends/{base.py ✔, fake_backend.py ✔, questa_backend.py}
+  fifo_rl/envs/coverage_env.py ✔
+  fifo_rl/questa/{report_parser.py ✔, runner.py}
+  fifo_rl/evaluation.py ✔
+  fifo_rl/agents/{random_agent.py ✔, dqn.py}
+  fifo_rl/utils/logger.py ✔
+  scripts/{evaluate.py ✔, plot.py ✔, train.py}
+  tests/ ✔ (11 test files, 135 tests) + tests/fixtures/ ✔
   runs/   (git-ignored: sim dirs, logs, checkpoints)
 ```
 requirements.txt: `torch>=2.2` (CPU wheel: `--index-url https://download.pytorch.org/whl/cpu`), `numpy>=1.26`, `matplotlib>=3.8`, `pandas>=2.1`, `pyyaml>=6.0`, `tqdm>=4.66`, `pytest>=8.0`.
@@ -215,7 +219,7 @@ Logging: CSV per step (episode, step, action, new_bins, total_bins, epsilon, los
 - **Parser gotcha:** `vcover report -cvg -details` prints the covergroup twice (TYPE + instance) → 128 bin lines for 64 bins; parse only the first block or de-duplicate.
 - **How the test reports in `fifo_rl/tests/fixtures/` were made (to rebuild them):** default test, `-sv_seed 1`, three runs that stop at different points — `vsim -c -sv_seed 1 work.FIFO_top -coverage -do "coverage save -onexit x.ucdb; run 1us; quit -f"` (100 cycles), the same with `run 3us` (300 cycles) and with `run -all` (full run) — then `vcover report -cvg -details -nocompactcrossbins x.ucdb > file.txt`. The fourth file is the 100-cycle run reported *without* `-nocompactcrossbins`.
 - **Parser gotcha 2:** inside a cross, Questa lists covered bins first and ZERO bins last, so a bin's line position changes from run to run. Map bins **by name** (item + bin label) into our own fixed 64-index order; never by line position.
-- **Code that exists (2026-10-13), in `fifo_rl/` (on `FIFO_RL_dev` once Mohamed has pushed it):** `fifo_rl/coverage_model.py` (the 64 bins in a fixed order: `BIN_NAMES`, `BIN_INDEX`, `N_BINS`; names are `"<item>/<Questa label>"`, e.g. `cx_full/<auto[0],auto[0],auto[1]>`; checked against real Questa reports), `fifo_rl/state.py` (`StateEncoder`: `.reset()`, `.update(run_hits, action_id) -> (state, n_new)`, `.encode()`; no reward inside) and `fifo_rl/questa/report_parser.py` (`hits_vector(report_text) -> bool[64]`, `parse_bin_hits(report_text) -> {bin name: hit count}`; raises `ReportError` for a report made without `-nocompactcrossbins`, for unknown bins and for missing bins). `tests/fixtures/` holds 4 real reports (seed 1: 100 cycles = 36 bins, 300 cycles = 63, full run = 64, and one compacted report that must be rejected). 35 pytest tests pass, including the whole chain report → 64 flags → 87-number state. Setup: `python3 -m venv ~/venvs/fifo_rl`, activate, `pip install -r requirements.txt`, `pytest -q`.
+- **Code that exists (2026-10-13), in `fifo_rl/` (pushed to `FIFO_RL_dev`):** `fifo_rl/coverage_model.py` (the 64 bins in a fixed order: `BIN_NAMES`, `BIN_INDEX`, `N_BINS`; names are `"<item>/<Questa label>"`, e.g. `cx_full/<auto[0],auto[0],auto[1]>`; checked against real Questa reports), `fifo_rl/state.py` (`StateEncoder`: `.reset()`, `.update(run_hits, action_id) -> (state, n_new)`, `.encode()`; no reward inside) and `fifo_rl/questa/report_parser.py` (`hits_vector(report_text) -> bool[64]`, `parse_bin_hits(report_text) -> {bin name: hit count}`; raises `ReportError` for a report made without `-nocompactcrossbins`, for unknown bins and for missing bins). `tests/fixtures/` holds 4 real reports (seed 1: 100 cycles = 36 bins, 300 cycles = 63, full run = 64, and one compacted report that must be rejected). 35 pytest tests pass, including the whole chain report → 64 flags → 87-number state. Setup: `python3 -m venv ~/venvs/fifo_rl`, activate, `pip install -r requirements.txt`, `pytest -q`.
 - **Added 2026-10-14 (102 tests pass):** `fifo_rl/actions.py` (Contract B: 22 `ActionSpec`s, id = 5·level_idx + pattern_idx, then 20 `reset_with_traffic` (K=16), 21 `baseline_random` (K=18); pattern K=10; `to_cycles(id, rng)`, `to_plusargs(id)` with proposed names `+FILL_LEVEL +WR_PCT +RD_PCT +RST_PCT +NUM_CYCLES` — still to agree with the verification team), `fifo_rl/fake_fifo.py` (§1 model, `DEPTH` lives here; `hits(cycles)`, `bin_hit_counts(samples)`; raises if an ignore bin is ever hit), `fifo_rl/backends/{base,fake_backend}.py` (Contract C, ~0.4 ms/run), `fifo_rl/envs/coverage_env.py` (Contract D, per-run seed from (base seed, episode, step) as a 32-bit int usable as `-sv_seed`). `state.py` now takes `N_ACTIONS` from `actions.py`. **Fake FIFO checked against real Questa:** the seed-1 100-cycle report's 36 bins equal the fake FIFO's bins for any 10%-reset pattern (test `test_matches_real_questa_100_cycle_report`). Exact per-cycle replay still needs the UVM_HIGH log. Not there yet: Questa runner/backend, random baseline + plots, DQN.
 - **Reward (added 2026-10-14, 117 tests pass, needs team approval):** `fifo_rl/reward.py` — `r = scale·(new_bins − step_cost + closure_bonus·[this run closed 64/64])`, defaults `step_cost = 1` (one run costs one bin), `closure_bonus = 10`, `scale = 1/64`; `LEGACY_REWARD` = old `new bins − 0.1`. Property (tested): an episode closing in T runs sums (unscaled) to exactly `64 − T + 10`, so the only way to score more is fewer runs. Why: on the fake FIFO a random agent already reaches ~63/64 (budget 20: closes 39%, budget 40: 84%, mean 25 runs; 1st run ≈ 38 bins); with −0.1 a 5-run agent scores only ~4% above random, with −1 + bonus ~30%. Train with budget 20, evaluate with 40; γ ≈ 0.9. `CoverageEnv(backend, budget, reward=RewardConfig(...))`; `info['closed_now']` added.
 - **State encoding (as built):** float32 vector of 87 = [0:64] cumulative bin flags (0–17 coverpoints in `FIFO_coverage.sv` order × {0,1}; 18–22 cx_wr_ack, 23–27 cx_overflow, 28–33 cx_full, 34–41 cx_empty, 42–49 cx_almostfull, 50–57 cx_almostempty, 58–63 cx_underflow), [64] runs_left ÷ budget, [65:87] one-hot last action (all zeros before the first run). The last-action part is switchable (65 numbers without it).
