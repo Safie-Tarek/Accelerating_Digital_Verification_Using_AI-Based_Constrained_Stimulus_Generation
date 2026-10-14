@@ -41,7 +41,7 @@ The work is cut into 4 pieces that talk to each other through **4 small agreed i
 | **A. Bin list** | The 64 coverage bins in a fixed order, named like the Questa report | Member 1 | `BIN_NAMES` (64 names) + `BIN_INDEX` (name → number), e.g. `"cp_full/auto[1]"`, `"cx_full/<auto[0],auto[0],auto[1]>"` — **done**, in `fifo_rl/fifo_rl/coverage_model.py` |
 | **B. Action list** | The 22 scenarios | Member 2 | `ACTIONS: list[ActionSpec]`; `ActionSpec(level∈{0,1,7,8}, pattern∈{idle,wr,rd,wr_rd,rand50}, k_cycles)` + `reset_with_traffic` + `baseline_random` |
 | **C. Backend** | Run one scenario, return which bins were hit | Members 1 & 4 | `run(action_id: int, seed: int) -> np.ndarray[bool]` of shape (64,) |
-| **D. Env** | Gym-style game | Member 2 | `reset() -> obs (87,)`; `step(a) -> (obs, reward, done, info)`; obs = 64 bins + 22 one-hot last action + 1 budget left; reward = new bins − 0.1 |
+| **D. Env** | Gym-style game | Member 2 | `reset() -> obs (87,)`; `step(a) -> (obs, reward, done, info)`; obs = 64 bins + 22 one-hot last action + 1 budget left; reward = (new bins − 1 + 10·[this run closed 64/64]) / 64 (`fifo_rl/reward.py`, proposed 2026-10-14, replaces new bins − 0.1 — needs team approval) |
 
 5. Git: everyone branches from `FIFO_RL_dev` (`feat/fake-fifo`, `feat/env-baselines`, `feat/dqn`, `feat/questa-bridge`) and opens a PR into `FIFO_RL_dev`.
 
@@ -122,4 +122,4 @@ Done when: `run(action_id, seed)` returns the right 64-bin vector from a real si
 ## 5. Open items for the whole team
 - Engineer: is "Python in WSL + Windows Questa" OK, or must Questa run on Linux? (Code is ready for either — one config change.)
 - Supervisors: the current covergroup is closed by plain random in one ~3 s run, so RL can't fairly beat random on it. Decide: FIFO as **pipeline pilot** and/or ask the verification team for a **richer coverage model**.
-- Approve the 22 actions, the 87-number state and the reward (new bins − 0.1).
+- Approve the 22 actions, the 87-number state and the reward: (new bins − 1 + 10 on the closing run) / 64, see `fifo_rl/reward.py` (was new bins − 0.1; `LEGACY_REWARD` keeps the old one).

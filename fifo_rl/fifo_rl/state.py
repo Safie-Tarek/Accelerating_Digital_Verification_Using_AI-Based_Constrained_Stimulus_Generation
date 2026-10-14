@@ -10,11 +10,12 @@ Reward is not computed here: update() only reports how many bins are new.
 
 import numpy as np
 
+from fifo_rl.actions import N_ACTIONS
 from fifo_rl.coverage_model import N_BINS
 
 
 class StateEncoder:
-    def __init__(self, budget, n_actions=22, n_bins=N_BINS, include_last_action=True):
+    def __init__(self, budget, n_actions=N_ACTIONS, n_bins=N_BINS, include_last_action=True):
         if not isinstance(budget, (int, np.integer)) or budget < 1:
             raise ValueError(f"budget must be a whole number of runs, at least 1, got {budget}")
         if n_actions < 1:
