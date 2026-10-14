@@ -8,6 +8,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 /fifo_rl/runs/
+.\venv\
 
 # Questa artefacts, in case someone simulates inside src codes/
 /src codes/work/
