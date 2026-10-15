@@ -426,7 +426,7 @@ Only **seed** and **run length** (`run <N>us`) can be changed without editing th
 Think of it as a **game**:
 - The **board** is the checklist of 64 boxes, all empty at the start.
 - Each **turn**, the agent picks one **scenario** to simulate (e.g. "fill the FIFO to full, then keep writing").
-- The simulator runs it and ticks some boxes. The **points** for that turn = how many *new* boxes got ticked (minus a small cost per turn, so the agent hurries).
+- The simulator runs it and ticks some boxes. The **points** for that turn = how many *new* boxes got ticked, minus a cost of 1 box per turn (so the agent hurries), plus a bonus of 10 on the turn that completes the board.
 - The game ends when all boxes are ticked or the **budget** of turns runs out.
 - A good agent finishes the board in fewer turns than picking scenarios at random.
 
@@ -434,14 +434,15 @@ Think of it as a **game**:
 |---|---|
 | Environment | The FIFO simulator (fake Python one first, real Questa later) |
 | State (what the agent sees) | 64 ticked/empty boxes + which scenario it chose last + turns left → 87 numbers |
-| Action (what it chooses) | One of ~22 scenarios |
-| Reward | Number of newly ticked boxes − 0.1 |
+| Action (what it chooses) | One of 22 scenarios |
+| Reward | (newly ticked boxes − 1 + 10 on the turn that reaches 64/64) ÷ 64 — see `fifo_rl/reward.py`. Over a whole game that closes in T turns the points add up to 64 − T + 10, so the only way to score more is to finish in fewer turns. (Proposed 2026-10-14, replaces "new boxes − 0.1"; needs team approval.) |
 | Episode | One full game (until 64/64 or budget used) |
 
 **Important:** each simulation starts with an empty FIFO (it begins with a reset), so a scenario must first **reach** the interesting fill level and then **do** something there. That's why actions look like "reset → fill to level L → pattern P for K cycles":
 - L ∈ {0 (empty), 1, 7, 8 (full)}
 - P ∈ {idle, write-only, read-only, write+read, random 50/50}
 - → 20 scenarios, plus "reset with traffic" (only way to tick the reset-only boxes) and "plain random 70/30/10" (the plan's FIFO_4 recipe) = **22 actions**.
+- As built in `fifo_rl/actions.py`: K = 10 pattern cycles; action id = 5 × (index of L) + (index of P), e.g. `L8_idle` = 15; id 20 = `reset_with_traffic` (16 cycles), id 21 = `baseline_random` (18 cycles).
 
 Examples: (full, idle) ticks "idle while full"; (full, write-only) ticks overflow; (empty, write+read) ticks "write+read at almost-empty".
 
@@ -460,49 +461,58 @@ Because nothing carries over between runs except which boxes are ticked, this is
 | 0 | Agent runs in **WSL Ubuntu** (decided; install `python3-pip python3-venv` once). Decide FIFO as pilot (b) or richer coverage (a). Send the 6 requests to the verification team | Clear direction; testbench work starts in parallel | No |
 | 1 | Create the project folder, virtual env, `requirements.txt` — **done 2026-10-13** | Empty skeleton that installs | No |
 | 2 | `coverage_model.py`: list the 64 bins in a fixed order, names matching the Questa report — **done 2026-10-13**, together with `state.py` (the state encoder: 64 bin flags + budget left + last action = 87 numbers) | One shared definition of the state vector | No |
-| 3 | **Fake FIFO env** in Python: the counter rules + flag rules + sampling, ticking the 64 bins | Simulates thousands of runs per second | No |
-| 3b | **Exact check vs Questa:** run Questa once with `+UVM_VERBOSITY=UVM_HIGH` (the monitor then prints every cycle's inputs and flags), replay those exact inputs through the fake FIFO, and require the same flags every cycle and the same bin hit counts (seed 1: `cp_wr_en` 3171/7029, `cx_full <0,0,1>` = 163) | Proof the fake matches the real thing | One run |
-| 4 | `actions.py`: turn each of the 22 scenarios into a list of (rst_n, wr_en, rd_en) per cycle, always starting with reset | The action space | No |
-| 5 | Env interface: `reset()` → state; `step(action)` → (state, reward, done, info) | Gym-style game | No |
-| 6 | **Random baselines**: (i) random scenario each turn, (ii) plain 70/30/10 random runs. Plot coverage vs number of runs, averaged over ≥ 20 seeds | The bar the agent must beat | No |
+| 3 | **Fake FIFO env** in Python: the counter rules + flag rules + sampling, ticking the 64 bins — **done 2026-10-14** (`fake_fifo.py` + `backends/fake_backend.py`, ~0.4 ms per run) | Simulates thousands of runs per second | No |
+| 3b | **Exact check vs Questa:** run Questa once with `+UVM_VERBOSITY=UVM_HIGH` (the monitor then prints every cycle's inputs and flags), replay those exact inputs through the fake FIFO, and require the same flags every cycle and the same bin hit counts (seed 1: `cp_wr_en` 3171/7029, `cx_full <0,0,1>` = 163) — **partly done:** the fake FIFO ticks the same 36 bins as the real seed-1 100-cycle report; the per-cycle replay still needs the UVM_HIGH log | Proof the fake matches the real thing | One run |
+| 4 | `actions.py`: turn each of the 22 scenarios into a list of (rst_n, wr_en, rd_en) per cycle, always starting with reset — **done 2026-10-14** (also `to_plusargs()` for the future Questa test) | The action space | No |
+| 5 | Env interface: `reset()` → state; `step(action)` → (state, reward, done, info) — **done 2026-10-14** (`envs/coverage_env.py` + `reward.py`; works with any backend; 117 tests pass) | Gym-style game | No |
+| 6 | **Random baselines**: (i) random scenario each turn, (ii) plain 70/30/10 random runs. Plot coverage vs number of runs, averaged over ≥ 20 seeds — **done 2026-10-14** (`agents/random_agent.py`, `evaluation.py`, `utils/logger.py`, `scripts/evaluate.py`, `scripts/plot.py`). Results (100 episodes, budget 40): random action each run closes 84% within 40 runs (mean 21.6 runs when it closes); always-`baseline_random` closes 63%; a greedy agent that knows each action's hit odds closes 100% in ~5 runs (the headroom for the DQN). One long 70/30/10 run like FIFO_test closes in a median of 343 cycles (95% by 654), in line with Questa's 400–500 | The bar the agent must beat | No |
 | 7 | **DQN**: MLP 87 → 128 → 128 → 22, replay buffer 10k, batch 64, Adam lr 1e-3, γ ≈ 0.9, ε 1.0 → 0.05, target sync every ~200 steps, Huber loss | First learning agent | No |
 | 8 | **DDQN** upgrade | More stable Q-values | No |
 | 9 | Compare agent vs random on the fake env: runs-to-100%, area under the coverage curve | First results + plots | No |
 | 10 | Questa runner + report parser (`subprocess` → `vsim`/`vcover` → 64-bin vector). Testable now using `run <N>us` and saved reports — **parser done 2026-10-13** (`questa/report_parser.py`, tested on 4 real reports); the runner is still to do | Bridge to the real simulator | Yes |
-| 11 | `questa_env.py` once the RL test + plusargs exist; check fake vs real bins for each action | Real file-based loop | Yes (+ verification team) |
+| 11 | `backends/questa_backend.py` (plugs into the same `CoverageEnv`) once the RL test + plusargs exist; check fake vs real bins for each action | Real file-based loop | Yes (+ verification team) |
 | 12 | Final comparison on real Questa (runs and wall-clock time), logs and plots | Project results | Yes |
+
+**Where we are (2026-10-14):** steps 1–6 are done: the game is playable on the fake FIFO and the random baselines are measured. **Next:** step 7 (DQN) on `CoverageEnv(FakeBackend())`, evaluated with the same `evaluation.run_episodes` / `summarize` so its numbers sit next to the baselines. The Questa runner (step 10) can be built in parallel with `run <N>us`.
 
 ### Logging and plots
 - CSV per step: episode, step, action, new_bins, total_bins, epsilon, loss.
 - Plots: coverage vs runs (agent vs random, mean ± std over seeds), learning curve (episode return), action histogram (which scenarios the agent prefers).
 
-### Proposed folder structure (exists so far: `README.md`, `requirements.txt`, `pyproject.toml`, `fifo_rl/coverage_model.py`, `fifo_rl/state.py`, `fifo_rl/questa/report_parser.py`, `tests/test_coverage_model.py`, `tests/test_state.py`, `tests/test_report_parser.py`, `tests/fixtures/`)
+### Folder structure (✔ = exists, 2026-10-14; the rest is still to write)
+The original plan had one env class per simulator (`fake_fifo_env.py`, `questa_env.py`). As built, there is **one** env (`coverage_env.py`) and the simulator is a swappable **backend** — so step 11 becomes "write `questa_backend.py`", not a second env.
 ```
 fifo_rl/
-  requirements.txt
-  README.md
+  requirements.txt              ✔
+  README.md                     ✔
+  pyproject.toml                ✔
   configs/default.yaml          # actions, budget, hyper-parameters
   fifo_rl/
-    coverage_model.py           # the 64 bins (fixed order)
-    actions.py                  # 22 scenarios → per-cycle stimulus
+    coverage_model.py           ✔ the 64 bins (fixed order)
+    state.py                    ✔ 87-number state encoder
+    actions.py                  ✔ 22 scenarios → per-cycle stimulus / plusargs
+    fake_fifo.py                ✔ Python FIFO + monitor sampling → 64-bin hits
+    reward.py                   ✔ RewardConfig + compute_reward
+    evaluation.py               ✔ run_episodes / summarize / long-random baseline
+    backends/
+      base.py                   ✔ run(action_id, seed) -> bool[64]
+      fake_backend.py           ✔ Python FIFO (training)
+      questa_backend.py         # real simulator (validation, final results)
     envs/
-      base.py                   # reset() / step() interface
-      fake_fifo_env.py          # Python FIFO + coverage
-      questa_env.py             # real simulator via files
+      coverage_env.py           ✔ reset() / step(), works with any backend
     questa/
+      report_parser.py          ✔ vcover text → 64-bin vector
       runner.py                 # vlog / vsim / vcover calls
-      report_parser.py          # vcover text → 64-bin vector
     agents/
-      random_agent.py           # baseline
+      random_agent.py           ✔ baselines
       dqn.py                    # DQN + DDQN, replay buffer, target net, ε-greedy
-    utils/logger.py
+    utils/logger.py             ✔ CSV logging
   scripts/
+    evaluate.py                 ✔ baselines → CSV + summary JSON
+    plot.py                     ✔ coverage-vs-runs + runs-to-close plots
     train.py
-    evaluate.py                 # agent vs random
-    plot.py
-  tests/
-    test_fake_fifo.py           # fake FIFO follows the DUT rules
-    test_parser.py              # parse a saved Questa report
+  tests/                        ✔ test_{coverage_model,state,actions,fake_fifo,fake_backend,reward,coverage_env,report_parser}.py
+    fixtures/                   ✔ 4 real Questa reports
   runs/                         # git-ignored: sim folders, logs, checkpoints
 ```
 
