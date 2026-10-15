@@ -30,7 +30,15 @@ class ReportError(ValueError):
 
 
 def parse_bin_hits(report_text):
-    """Return {bin name: hit count} for every bin line in the report."""
+    """Return {bin name: hit count} for every bin line in the report.
+
+    Input:  report_text, the text of `vcover report -cvg -details -nocompactcrossbins`.
+    Output: a dict {full bin name: hit count}, e.g. {"cp_full/auto[1]": 163, ...}.
+    Logic:  read line by line; a "Coverpoint"/"Cross" line sets the current item, a "bin" line
+            gives (label, count) for that item ("ignore_bin" lines do not match and are skipped).
+            Raise ReportError for a compacted report ("*" in a label), a bin line before any item,
+            or the same bin listed twice with different counts (the report prints it twice).
+    """
     hits = {}
     item = None
     for line in report_text.splitlines():
@@ -57,7 +65,13 @@ def parse_bin_hits(report_text):
 
 
 def hits_vector(report_text):
-    """Return a bool array of N_BINS, True where the bin was hit, in BIN_NAMES order."""
+    """Return a bool array of N_BINS, True where the bin was hit, in BIN_NAMES order.
+
+    Input:  report_text, the text of a Questa coverage report.
+    Output: a bool numpy array of 64 (same order as the state vector): True = hit at least once.
+    Logic:  parse the counts with parse_bin_hits, check the report has exactly our 64 bins
+            (no unknown bin, none missing - else ReportError), then map each name to count > 0.
+    """
     hits = parse_bin_hits(report_text)
     unknown = sorted(name for name in hits if name not in BIN_INDEX)
     if unknown:

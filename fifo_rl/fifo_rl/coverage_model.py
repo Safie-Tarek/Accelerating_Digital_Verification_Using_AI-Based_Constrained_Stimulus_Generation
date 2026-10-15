@@ -36,19 +36,44 @@ CROSSES = {
 
 
 def bin_name(item, label):
-    """Full bin name from a coverpoint/cross name and Questa's bin label."""
+    """Full bin name from a coverpoint/cross name and Questa's bin label.
+
+    Input:  item, a coverpoint/cross name (e.g. "cx_full"); label, Questa's bin label
+            (e.g. "<auto[0],auto[0],auto[1]>").
+    Output: the bin's full name, e.g. "cx_full/<auto[0],auto[0],auto[1]>".
+    Logic:  join the two with "/" so every bin has one unique name across the covergroup.
+    """
     return f"{item}/{label}"
 
 
 def coverpoint_label(value):
+    """Questa's label of a coverpoint bin.
+
+    Input:  value, 0 or 1 (the value of the sampled signal).
+    Output: the label "auto[0]" or "auto[1]".
+    Logic:  the coverpoints have no explicit bins, so Questa names them auto[<value>].
+    """
     return f"auto[{value}]"
 
 
 def cross_label(wr_en, rd_en, flag):
+    """Questa's label of a cross bin.
+
+    Input:  wr_en, rd_en, flag - each 0 or 1.
+    Output: the label, e.g. "<auto[1],auto[0],auto[1]>".
+    Logic:  a cross bin is named by the auto bin of each crossed coverpoint, in declaration order.
+    """
     return f"<auto[{wr_en}],auto[{rd_en}],auto[{flag}]>"
 
 
 def _build_bin_names():
+    """Build the fixed list of the 64 bin names.
+
+    Input:  nothing (uses COVERPOINTS and CROSSES above).
+    Output: a tuple of 64 names; the position of a name is its index in every state vector.
+    Logic:  first the 9 coverpoints x (auto[0], auto[1]) = 18 names; then for each cross every
+            (wr_en, rd_en, flag) combo in sorted order, skipping the ignore_bins = 46 names.
+    """
     names = []
     for cp in COVERPOINTS:
         for value in (0, 1):

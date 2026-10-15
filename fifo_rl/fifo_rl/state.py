@@ -16,6 +16,14 @@ from fifo_rl.coverage_model import N_BINS
 
 class StateEncoder:
     def __init__(self, budget, n_actions=N_ACTIONS, n_bins=N_BINS, include_last_action=True):
+        """Set up the encoder.
+
+        Input:  budget, runs per episode (whole number >= 1); n_actions, size of the one-hot
+                (22); n_bins, number of coverage bins (64); include_last_action, add the
+                one-hot of the last action to the state or not.
+        Output: nothing; the encoder starts in the reset state.
+        Logic:  check the numbers are valid (ValueError if not), store them, then reset().
+        """
         if not isinstance(budget, (int, np.integer)) or budget < 1:
             raise ValueError(f"budget must be a whole number of runs, at least 1, got {budget}")
         if n_actions < 1:
@@ -30,24 +38,38 @@ class StateEncoder:
 
     @property
     def size(self):
-        """Length of the state vector."""
+        """Length of the state vector.
+
+        Input:  nothing. Output: n_bins + 1 (+ n_actions if include_last_action) = 87 by default.
+        """
         return self.n_bins + 1 + (self.n_actions if self.include_last_action else 0)
 
     @property
     def checklist(self):
-        """Copy of the bins hit so far (bool array of n_bins)."""
+        """Copy of the bins hit so far (bool array of n_bins).
+
+        Input:  nothing. Output: bool array of 64.
+        Logic:  a copy, so the caller cannot change the encoder's checklist by accident.
+        """
         return self._checklist.copy()
 
     @property
     def runs_left(self):
+        """Runs still allowed in this episode. Input: nothing. Output: int, budget down to 0."""
         return self._runs_left
 
     @property
     def all_covered(self):
+        """Is coverage complete? Input: nothing. Output: True if every bin has been hit."""
         return bool(self._checklist.all())
 
     def reset(self):
-        """Start a new episode: nothing covered, full budget, no last action."""
+        """Start a new episode: nothing covered, full budget, no last action.
+
+        Input:  nothing.
+        Output: the first state vector (all bins 0, budget 1.0, one-hot all 0).
+        Logic:  clear the checklist, refill the budget, forget the last action, then encode().
+        """
         self._checklist = np.zeros(self.n_bins, dtype=bool)
         self._runs_left = self.budget
         self._last_action = None
@@ -59,6 +81,12 @@ class StateEncoder:
         run_hits:  n_bins flags, True where that run hit the bin.
         action_id: the action that produced the run (0 .. n_actions-1).
         Returns (state, n_new), n_new = bins hit for the first time in this episode.
+
+        Input:  run_hits and action_id as above.
+        Output: (new state vector, n_new).
+        Logic:  check the budget is not used up and the inputs are valid; count the bins hit now
+                but not before (run_hits AND NOT checklist); OR run_hits into the checklist;
+                take one run from the budget; remember the action; encode the new state.
         """
         if self._runs_left == 0:
             raise ValueError("budget is used up; call reset() to start a new episode")
@@ -76,7 +104,13 @@ class StateEncoder:
         return self.encode(), n_new
 
     def encode(self):
-        """Current state as a float32 vector; every value is between 0 and 1."""
+        """Current state as a float32 vector; every value is between 0 and 1.
+
+        Input:  nothing (uses the checklist, runs_left and last action).
+        Output: float32 array of `size` numbers: [0:64] bins, [64] budget, [65:87] one-hot.
+        Logic:  start from zeros; copy the checklist as 0/1; write runs_left / budget; if the
+                one-hot is on and a run has happened, set a 1 at 65 + last action.
+        """
         state = np.zeros(self.size, dtype=np.float32)
         state[: self.n_bins] = self._checklist
         state[self.n_bins] = self._runs_left / self.budget
