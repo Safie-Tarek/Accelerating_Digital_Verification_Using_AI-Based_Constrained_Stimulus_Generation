@@ -14,7 +14,12 @@ RL agent for the FIFO testbench in `../src codes/`. Work in progress: state, act
 | `fifo_rl/agents/random_agent.py` | Baselines: `RandomAgent` (random action every run), `FixedActionAgent` (always action 21 = 70/30/10) |
 | `fifo_rl/evaluation.py` | `run_episodes`, `summarize` (closure rate, runs to close, coverage curve) + the one-long-random-run baseline |
 | `fifo_rl/utils/logger.py` | `CsvLogger`: one CSV row per run, same columns for every agent |
-| `scripts/evaluate.py`, `scripts/plot.py` | Run the baselines and plot them (see below) |
+| `fifo_rl/agents/replay_buffer.py` | `ReplayBuffer`: numpy ring buffer, `push` / `sample(B) -> Batch` (Contract E) |
+| `fifo_rl/agents/schedules.py` | ε schedules: `LinearEpsilon`, `ExpEpsilon`, `make_schedule(cfg)` |
+| `fifo_rl/agents/stub_agent.py` | `StubAgent`: Contract E interface without learning, for tests and plumbing checks |
+| `configs/default.yaml`, `fifo_rl/config.py` | DQN / DDQN settings; `load_config`, CLI overrides (`--double false`) |
+| `scripts/train.py` | Train DQN / DDQN on the fake FIFO, greedy evaluation every `eval_every` episodes, checkpoints |
+| `scripts/evaluate.py`, `scripts/plot.py` | Run the baselines / a trained agent and plot them (see below) |
 | `fifo_rl/questa/report_parser.py` | `hits_vector(report_text)`: Questa coverage report → 64 true/false flags, one per bin |
 | `tests/` | pytest tests for all of the above |
 | `tests/fixtures/` | 4 real Questa reports used by the tests |
@@ -37,3 +42,17 @@ pytest -q
 python -m scripts.evaluate      # writes runs/baselines/*.csv, *_summary.json, long_random.json
 python -m scripts.plot          # writes runs/baselines/coverage_vs_runs.png, runs_to_close.png
 ```
+
+## DQN / DDQN training
+
+```bash
+python -m scripts.train                          # DDQN -> runs/train/ddqn_seed0/
+python -m scripts.train --double false --seed 1  # vanilla DQN -> runs/train/dqn_seed1/
+python -m scripts.train --agent stub             # plumbing check without the DQN (no learning)
+python -m scripts.evaluate --agents random fixed dqn --checkpoint runs/train/ddqn_seed0/best.pt
+python -m scripts.plot --train runs/train/dqn_seed* runs/train/ddqn_seed*   # learning curves
+```
+
+Every training folder holds `config.yaml`, `steps.csv`, `eval.csv`, `last.pt`, `best.pt` and `<agent>_summary.json`.
+Training picks `best.pt` on validation episodes (seed + 1000); `scripts.evaluate` then measures it on the same test
+episodes as the baselines.

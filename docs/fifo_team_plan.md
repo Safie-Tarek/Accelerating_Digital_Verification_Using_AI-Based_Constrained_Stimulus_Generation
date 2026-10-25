@@ -1,6 +1,6 @@
 # FIFO RL Agent — Team Work Split (4 members)
 
-## 0. Status (2026-10-14)
+## 0. Status (2026-10-25)
 
 | Piece | State |
 |---|---|
@@ -11,10 +11,11 @@
 | Fake FIFO (`fake_fifo.py`) | ✅ done; matches the real 100-cycle report (36 bins) · ⏳ per-cycle replay needs the UVM_HIGH log |
 | Questa report parser | ✅ done |
 | Random baselines, logger, plots | ✅ done (`python -m scripts.evaluate`, `python -m scripts.plot`) |
-| DQN / DDQN, `train.py` | 🔨 **in progress**, split between Mohamed (agent core) and Jana (training side), Contract E — see §6 |
+| DQN / DDQN — training side (Jana, `feat/ddqn-training`) | ✅ done, not yet merged: `ReplayBuffer`, ε schedules, `configs/default.yaml` + `config.py`, `scripts/train.py`, `evaluate.py --agents dqn --checkpoint`, `plot.py --train`, `StubAgent`; tested end to end with the stub (3000 episodes ≈ 54k steps ≈ 24 s) |
+| DQN / DDQN — agent core (Mohamed, `feat/ddqn-core`) | 🔨 in progress: `networks.py`, `dqn.py` (`DQNAgent`), DDQN switch, `test_dqn.py`; needs `torch` added to `requirements.txt` |
 | Questa runner | ⏳ not started (can start now with `run <N>us`) |
 
-135 tests pass. Baseline results (fake FIFO, 100 episodes, budget 40): random action each run closes 84% within 40 runs (mean 21.6 runs when it closes); always-`baseline_random` closes 63%; a greedy agent that knows each action's hit odds closes 100% in ~5 runs (the headroom for the DQN). One long 70/30/10 run like FIFO_test closes in a median of 343 cycles (95% by 654), in line with Questa's 400–500. **Next part to build: the DQN/DDQN, split between Mohamed and Jana (§6)**, using `fifo_rl/evaluation.py` for its evaluation. The Questa runner (Member 4) can be built at the same time.
+160 tests pass on `feat/ddqn-training` (135 on `FIFO_RL_dev`). Baseline results (fake FIFO, 100 episodes, budget 40): random action each run closes 84% within 40 runs (mean 21.6 runs when it closes); always-`baseline_random` closes 63%; a greedy agent that knows each action's hit odds closes 100% in ~5 runs (the headroom for the DQN). One long 70/30/10 run like FIFO_test closes in a median of 343 cycles (95% by 654), in line with Questa's 400–500. **Next part to build: the DQN/DDQN agent core (Mohamed, §6.2)**; the training side (§6.3) is ready and waits for `DQNAgent` to plug into `scripts/train.py`. Open points for Mohamed: `eps_decay_steps` set to 30 000 (ε reaches 0.05 around episode 1650); `train.py` calls `learn()` every `train_freq` steps, the agent returns `None` until `learning_starts` and counts its steps in `observe()`; `best.pt` is picked on validation episodes (seed + 1000), separate from the seed-0 test episodes of `scripts.evaluate`; new key `eps_schedule` (`linear` / `exp`); new keys such as gradient clipping must be added to `default.yaml` (unknown keys are rejected); `summarize()` now also reports `coverage_auc`. The Questa runner (Member 4) can be built at the same time.
 
 ## 1. The idea in one picture
 

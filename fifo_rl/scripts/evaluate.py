@@ -3,11 +3,14 @@
 Run from the fifo_rl/ folder:
     python -m scripts.evaluate                                   # everything, default settings
     python -m scripts.evaluate --agents random --episodes 200 --budget 40
+    python -m scripts.evaluate --agents dqn --checkpoint runs/train/ddqn_seed0/best.pt --long-seeds 0
 
 Baselines:
     random        (i)    a random one of the 22 actions every run
     fixed         (ii-a) always baseline_random (id 21): 70/30/10 random, 18 cycles per run
     long random   (ii-b) one continuous 70/30/10 run like FIFO_test: cycles until 64/64
+and the trained agent:
+    dqn           a DQNAgent checkpoint (DQN or DDQN, named after it), played greedily
 
 Writes into --out (default runs/baselines/, git-ignored):
     <agent>_steps.csv      one row per run (fifo_rl/utils/logger.py format)
@@ -22,26 +25,33 @@ from pathlib import Path
 from fifo_rl.agents.random_agent import FixedActionAgent, RandomAgent
 from fifo_rl.backends.fake_backend import FakeBackend
 from fifo_rl.envs.coverage_env import CoverageEnv
-from fifo_rl.evaluation import long_random_cycles_to_close, run_episodes, summarize
+from fifo_rl.evaluation import GreedyWrapper, long_random_cycles_to_close, run_episodes, summarize
 from fifo_rl.utils.logger import CsvLogger
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--agents", nargs="+", choices=("random", "fixed"), default=["random", "fixed"])
+    parser.add_argument("--agents", nargs="+", choices=("random", "fixed", "dqn"), default=["random", "fixed"])
     parser.add_argument("--action", type=int, default=21, help="action of the fixed agent (default 21)")
+    parser.add_argument("--checkpoint", type=Path, help="checkpoint of the dqn agent (train.py's best.pt)")
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--budget", type=int, default=40, help="runs per episode")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--long-seeds", type=int, default=100, help="seeds for baseline (ii-b); 0 = skip")
     parser.add_argument("--out", type=Path, default=Path("runs/baselines"))
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if "dqn" in args.agents and args.checkpoint is None:
+        parser.error("--agents dqn needs --checkpoint")
+    return args
 
 
 def make_agent(kind, args):
-    """Input: "random" or "fixed", the parsed args. Output: the agent."""
+    """Input: "random", "fixed" or "dqn", the parsed args. Output: the agent (dqn: greedy)."""
     if kind == "random":
         return RandomAgent(seed=args.seed)
+    if kind == "dqn":
+        from fifo_rl.agents.dqn import DQNAgent
+        return GreedyWrapper(DQNAgent.load(args.checkpoint))
     return FixedActionAgent(args.action)
 
 
@@ -81,6 +91,7 @@ def main(argv=None):
         print(f"  runs used (unclosed=budget): {_fmt(s['runs_used'])}")
         print(f"  bins at the end            : {_fmt(s['final_bins'])}")
         print(f"  return                     : {_fmt(s['return'], 3)}")
+        print(f"  coverage AUC (1 = best)    : {s['coverage_auc']:.3f}")
         print(f"  bins after run 1 / 5 / 10  : "
               + " / ".join(f"{s['curve_mean'][k]:.1f}" for k in (0, 4, 9) if k < args.budget) + "\n")
 

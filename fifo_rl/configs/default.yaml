@@ -1,0 +1,27 @@
+# DQN / DDQN training settings (Contract E, docs/fifo_team_plan.md §6.1).
+# Any key can be overridden on the command line: python -m scripts.train --double false --seed 3
+
+# network and update rule (fifo_rl/agents/dqn.py)
+hidden: [128, 128]
+lr: 1.0e-3
+gamma: 0.9
+batch_size: 64
+buffer_capacity: 10000
+learning_starts: 500      # no gradient step before this many transitions are stored
+train_freq: 1             # one learn() call every train_freq env steps
+target_sync: 200          # hard copy online -> target every target_sync gradient steps
+double: true              # true = DDQN, false = vanilla DQN
+
+# exploration (fifo_rl/agents/schedules.py)
+eps_schedule: linear      # linear or exp
+eps_start: 1.0
+eps_end: 0.05
+eps_decay_steps: 30000    # ~1500-2000 training episodes at budget 20
+
+# episodes
+budget_train: 20
+budget_eval: 40
+n_episodes: 3000
+eval_every: 100           # greedy evaluation every eval_every training episodes
+eval_episodes: 100
+seed: 0

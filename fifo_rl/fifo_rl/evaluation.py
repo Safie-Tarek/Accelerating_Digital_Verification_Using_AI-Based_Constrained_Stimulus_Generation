@@ -13,6 +13,7 @@ Metrics (per agent, over many episodes):
     return              sum of rewards (the number the DQN is trained to maximise)
     curve               bins covered after run 1, 2, ..., budget (an episode that closed early
                         stays at 64), averaged over episodes -> the "coverage vs runs" plot
+    coverage_auc        area under that curve / (budget * 64), in 0..1: 1 = all bins after run 1
 
 Also here: the "one long constrained-random run" baseline (long_random_cycles_to_close), which
 answers how many cycles plain random needs in ONE simulation - the fairness check for the
@@ -78,6 +79,17 @@ def run_episode(env, agent, logger=None):
     return result
 
 
+class GreedyWrapper:
+    """Makes a learning agent (act(state, greedy)) play without exploring, for evaluation."""
+
+    def __init__(self, agent):
+        self.agent = agent
+        self.name = agent.name
+
+    def act(self, state):
+        return self.agent.act(state, greedy=True)
+
+
 def run_episodes(env, agent, n_episodes, logger=None):
     """Input: env, agent, number of episodes, optional logger. Output: list of EpisodeResult."""
     if n_episodes < 1:
@@ -121,7 +133,7 @@ def summarize(results, budget, n_actions):
 
     Input:  results, a list of EpisodeResult; budget, runs per episode; n_actions (22).
     Output: dict with n_episodes, budget, closure_rate, runs_to_close, runs_to_close_all,
-            runs_used, final_bins, return, curve_mean, curve_std, action_counts.
+            runs_used, final_bins, return, coverage_auc, curve_mean, curve_std, action_counts.
     Logic:  see the module docstring for what each metric means and why it is there.
     """
     closed_runs = [res.runs for res in results if res.closed]
@@ -136,6 +148,7 @@ def summarize(results, budget, n_actions):
         "runs_used": _stats([res.runs for res in results]),
         "final_bins": _stats([res.final_bins for res in results]),
         "return": _stats([res.episode_return for res in results]),
+        "coverage_auc": float(curve.mean() / N_BINS),
         "curve_mean": curve.mean(axis=0).tolist(),
         "curve_std": curve.std(axis=0).tolist(),
         "action_counts": counts.tolist(),
