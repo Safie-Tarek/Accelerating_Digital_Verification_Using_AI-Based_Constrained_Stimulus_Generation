@@ -9,7 +9,6 @@ __pycache__/
 .pytest_cache/
 /fifo_rl/runs/
 .\venv\
-/fifo_rl/venv/
 .vscode/
 
 # Questa artefacts, in case someone simulates inside src codes/

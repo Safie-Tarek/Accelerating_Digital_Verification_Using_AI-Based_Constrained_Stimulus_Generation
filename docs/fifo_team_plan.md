@@ -11,10 +11,10 @@
 | Fake FIFO (`fake_fifo.py`) | ✅ done; matches the real 100-cycle report (36 bins) · ⏳ per-cycle replay needs the UVM_HIGH log |
 | Questa report parser | ✅ done |
 | Random baselines, logger, plots | ✅ done (`python -m scripts.evaluate`, `python -m scripts.plot`) |
-| DQN / DDQN, `train.py` | ⏭ **next** |
+| DQN / DDQN, `train.py` | 🔨 **in progress**, split between Mohamed (agent core) and Jana (training side), Contract E — see §6 |
 | Questa runner | ⏳ not started (can start now with `run <N>us`) |
 
-135 tests pass. Baseline results (fake FIFO, 100 episodes, budget 40): random action each run closes 84% within 40 runs (mean 21.6 runs when it closes); always-`baseline_random` closes 63%; a greedy agent that knows each action's hit odds closes 100% in ~5 runs (the headroom for the DQN). One long 70/30/10 run like FIFO_test closes in a median of 343 cycles (95% by 654), in line with Questa's 400–500. **Next part to build: the DQN (Member 3)**, using `fifo_rl/evaluation.py` for its evaluation. The Questa runner (Member 4) can be built at the same time.
+135 tests pass. Baseline results (fake FIFO, 100 episodes, budget 40): random action each run closes 84% within 40 runs (mean 21.6 runs when it closes); always-`baseline_random` closes 63%; a greedy agent that knows each action's hit odds closes 100% in ~5 runs (the headroom for the DQN). One long 70/30/10 run like FIFO_test closes in a median of 343 cycles (95% by 654), in line with Questa's 400–500. **Next part to build: the DQN/DDQN, split between Mohamed and Jana (§6)**, using `fifo_rl/evaluation.py` for its evaluation. The Questa runner (Member 4) can be built at the same time.
 
 ## 1. The idea in one picture
 
@@ -58,6 +58,7 @@ The work is cut into 4 pieces that talk to each other through **4 small agreed i
 | **B. Action list** | The 22 scenarios | Member 2 | `ACTIONS` (tuple of 22 `ActionSpec(id, name, level, wr_pct, rd_pct, rst_pct, k_cycles)`): ids 0–19 = level∈{0,1,7,8} × pattern∈{idle,wr,rd,wr_rd,rand50}, id = 5·level_idx + pattern_idx; 20 `reset_with_traffic`; 21 `baseline_random` — **done**, in `fifo_rl/fifo_rl/actions.py` |
 | **C. Backend** | Run one scenario, return which bins were hit | Members 1 & 4 | `run(action_id: int, seed: int) -> np.ndarray[bool]` of shape (64,) — **fake one done** (`backends/fake_backend.py`); Questa one to do |
 | **D. Env** | Gym-style game | Member 2 | `reset() -> obs (87,)`; `step(a) -> (obs, reward, done, info)`; obs = 64 bins + 1 budget left + 22 one-hot last action; reward = (new bins − 1 + 10·[this run closed 64/64]) / 64 (`fifo_rl/reward.py`, proposed 2026-10-14, replaces new bins − 0.1 — needs team approval) — **done**, `CoverageEnv(backend, budget, reward, seed)` in `fifo_rl/fifo_rl/envs/coverage_env.py` |
+| **E. Agent / buffer / schedule** | What the DDQN agent and the training script exchange (added 2026-10-25) | Mohamed (agent) & Jana (buffer, schedule, config) | `DQNAgent(state_dim, n_actions, cfg, buffer, epsilon_schedule, seed)` with `act(state, greedy=False)`, `observe(s,a,r,s2,done)`, `learn() -> loss \| None`, `epsilon`, `save/load`; `ReplayBuffer.push/sample -> Batch`; `schedule.value(step)` — full shapes in §6 |
 
 5. Git: everyone branches from `FIFO_RL_dev` (`feat/fake-fifo`, `feat/env-baselines`, `feat/dqn`, `feat/questa-bridge`) and opens a PR into `FIFO_RL_dev`.
 
@@ -91,6 +92,8 @@ Done when: `evaluate.py --agent random --backend fake` produces the baseline plo
 
 ### Member 3 — Mohamed: DQN → DDQN agent + integration lead ("the brain")
 **Goal:** an agent that closes coverage in fewer runs than random.
+
+> **Update 2026-10-25:** tasks 2–4 below are now split between Mohamed (networks + update rule) and Jana (replay buffer, ε schedule, config, `train.py`, eval/plots) — see §6.
 
 Tasks:
 1. Day 1: project skeleton, `requirements.txt`, `configs/default.yaml`, contracts doc.
@@ -139,3 +142,65 @@ Done when: `run(action_id, seed)` returns the right 64-bin vector from a real si
 - Engineer: is "Python in WSL + Windows Questa" OK, or must Questa run on Linux? (Code is ready for either — one config change.)
 - Supervisors: the current covergroup is closed by plain random in one ~3 s run, so RL can't fairly beat random on it. Decide: FIFO as **pipeline pilot** and/or ask the verification team for a **richer coverage model**.
 - Approve the 22 actions, the 87-number state and the reward: (new bins − 1 + 10 on the closing run) / 64, see `fifo_rl/reward.py` (was new bins − 0.1; `LEGACY_REWARD` keeps the old one).
+
+---
+
+## 6. DDQN build — Mohamed + Jana (added 2026-10-25)
+
+Split: **Mohamed = "the brain"** (networks + update rule), **Jana = "everything around the brain"** (replay memory, exploration schedule, config, training and evaluation scripts). Both code against Contract E below, each with a stub of the other half, and merge at the end.
+
+### 6.1 Contract E (agree first, don't change without telling the other)
+
+**Agent** — Mohamed implements, Jana calls:
+```python
+agent = DQNAgent(state_dim=87, n_actions=22, cfg: dict, buffer, epsilon_schedule, seed)
+agent.name                              # "dqn" or "ddqn" (from cfg["double"])
+agent.act(state, greedy=False) -> int   # ε-greedy; greedy=True for evaluation
+agent.observe(s, a, r, s2, done)        # pushes into the buffer, counts steps
+agent.learn() -> float | None           # one gradient step; None until learning_starts
+agent.epsilon -> float                  # current ε (for the logger)
+agent.save(path) / DQNAgent.load(path, buffer=None)
+```
+`act(state)` without the extra argument keeps working, so `evaluation.run_episode` drives it unchanged; evaluation wraps it in a small `GreedyWrapper` that forces `greedy=True`.
+
+**Replay buffer** — Jana implements, the agent uses:
+```python
+buf = ReplayBuffer(capacity, state_dim, seed)
+buf.push(s, a, r, s2, done); len(buf)
+buf.sample(batch_size) -> Batch(states f32 (B,87), actions i64 (B,), rewards f32 (B,),
+                                next_states f32 (B,87), dones f32 (B,))   # numpy arrays
+```
+
+**Epsilon schedule** — Jana implements: `schedule.value(step) -> float`.
+
+**Config keys** (`configs/default.yaml`, shared): `hidden: [128, 128]`, `lr: 1e-3`, `gamma: 0.9`, `batch_size: 64`, `buffer_capacity: 10000`, `learning_starts: 500`, `train_freq: 1`, `target_sync: 200`, `double: true`, `eps_start: 1.0`, `eps_end: 0.05`, `eps_decay_steps` (to agree, e.g. 20k–50k — the fake env is cheap), `budget_train: 20`, `budget_eval: 40`, `n_episodes`, `eval_every`, `eval_episodes: 100`, `seed: 0`.
+
+**Episode end at the budget** is treated as terminal (`done = 1`); valid because the budget left is part of the state.
+
+### 6.2 Mohamed — branch `feat/ddqn-core`
+
+| File | Contents |
+|---|---|
+| `fifo_rl/agents/networks.py` | `QNetwork`: MLP 87→128→128→22 with ReLU, built from `cfg["hidden"]` |
+| `fifo_rl/agents/dqn.py` | `DQNAgent`: online + target nets, Adam, Huber loss, gradient clipping, ε-greedy `act`, hard target sync every `target_sync` steps, `save`/`load` (state dicts + cfg + step count) |
+| DDQN switch (inside `learn()`) | vanilla: `y = r + γ(1−d)·max_a Q_target(s′,a)`; double: `a* = argmax_a Q_online(s′,a)`, `y = r + γ(1−d)·Q_target(s′,a*)` |
+| `tests/test_dqn.py` | output shapes; DDQN target ≠ DQN target on hand-set nets (checked by hand); target sync exactly every N steps; loss falls when overfitting one fixed batch; save → load gives the same Q-values; `greedy=True` never explores |
+
+Until Jana's buffer is merged: a ~10-line list-based stub buffer returning the same `Batch`.
+
+### 6.3 Jana — branch `feat/ddqn-training`
+
+| File | Contents |
+|---|---|
+| `fifo_rl/agents/replay_buffer.py` | `ReplayBuffer`: numpy ring buffer, preallocated arrays, overwrites oldest when full, seeded sampling |
+| `fifo_rl/agents/schedules.py` | `LinearEpsilon(start, end, decay_steps)` (optionally `ExpEpsilon`) |
+| `configs/default.yaml` + `fifo_rl/config.py` | YAML loader with the keys above + CLI overrides (`--double false`, `--seed 3`) |
+| `scripts/train.py` | loop on `CoverageEnv(FakeBackend(), budget=20)`: act → step → observe → learn; every `eval_every` episodes a greedy evaluation on a **separate** `budget=40` env via `evaluation.run_episodes` + `summarize`; CSV via `CsvLogger` (episode, step, action, new_bins, total_bins, epsilon, loss); checkpoints `last.pt` and `best.pt` (best = highest closure rate, then fewest runs); `summary.json` in the format `plot.py` already reads |
+| `scripts/evaluate.py` (extend) | `--agent dqn --checkpoint runs/.../best.pt` |
+| `scripts/plot.py` (extend) | learning curve: eval runs-to-close and closure rate vs episodes; loss and ε vs steps |
+| tests | `test_replay_buffer.py` (wrap-around, shapes/dtypes, same seed → same sample), `test_schedules.py`, `test_train.py` smoke test with a **stub agent** (`RandomAgent` + no-op `observe`/`learn`) so it doesn't wait on Mohamed |
+
+### 6.4 Merge and done-criteria
+1. Both open PRs into `FIFO_RL_dev`; Mohamed merges buffer/schedules first, then the core, and removes his stub buffer.
+2. Joint integration check: `python -m scripts.train --double false` and `--double true` over ≥ 5 seeds, then `scripts.evaluate` for dqn / ddqn / random / fixed with budget 40, and `scripts.plot`.
+3. Done when DQN and DDQN beat the random-scenario baseline (84% closure, mean 21.6 runs) on runs-to-close and area under the coverage curve, aiming at the ~5-run greedy figure.
