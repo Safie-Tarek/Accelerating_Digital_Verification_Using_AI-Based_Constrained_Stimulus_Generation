@@ -1,6 +1,20 @@
 # FIFO RL Agent — Technical Context (team copy)
 
-> The AI team's shared working notes. It holds everything the DQN agent needs from the FIFO testbench in `src codes/` and `FIFO Plan.xlsx`. For a gentler, step-by-step explanation read [`fifo_walkthrough.md`](fifo_walkthrough.md); for who builds what, read [`fifo_team_plan.md`](fifo_team_plan.md). Last updated: 2026-10-14.
+> The AI team's shared working notes. It holds everything the DQN agent needs from the FIFO testbench in `src codes/` and `FIFO Plan.xlsx`. For a gentler, step-by-step explanation read [`fifo_walkthrough.md`](fifo_walkthrough.md); for who builds what, read [`fifo_team_plan.md`](fifo_team_plan.md). Last updated: 2026-10-26.
+
+## STATUS 2026-10-26 (newest — read this first; older notes below are history)
+- **The whole loop works on the fake FIFO:** fake FIFO → 64 bins → 87-number state → `DQNAgent` → one of 22 actions → reward → replay memory → learning. 183 tests pass (`feat/ddqn-core`).
+- **Who built what:**
+  - Kenzy: `actions.py` (22 actions), `fake_fifo.py`, `backends/`, `reward.py`, `envs/coverage_env.py`.
+  - Jana: random baselines, `evaluation.py`, `utils/logger.py`, `scripts/evaluate.py` / `plot.py`; then (PR #1, merged into `FIFO_RL_dev` at `840da5a`) `agents/replay_buffer.py`, `agents/schedules.py`, `agents/stub_agent.py`, `configs/default.yaml` + `config.py`, `scripts/train.py`.
+  - Mohamed (`feat/ddqn-core`, `7a48fea`, not yet merged): `agents/networks.py` (`QNetwork`), `agents/dqn.py` (`DQNAgent`), `tests/test_networks.py` + `tests/test_dqn.py`, `torch>=2.2`, config key `grad_clip: 10.0`.
+- **`DQNAgent` API:** `DQNAgent(state_dim, n_actions, cfg, buffer=None, epsilon_schedule=None, seed=0)`; `name` = `"ddqn"` if `cfg["double"]` else `"dqn"`; `act(state, greedy=False) -> int`; `observe(s, a, r, s2, done)`; `learn() -> float | None` (`None` until `len(buffer) >= max(learning_starts, batch_size)`; Huber loss, gradient-norm clip `grad_clip`, Adam, target copy every `target_sync` gradient steps); `epsilon` (0.0 without a schedule); `q_values(states)`; `td_target(rewards, next_states, dones)`; `save(path)` / `DQNAgent.load(path, buffer=None, epsilon_schedule=None)` (one torch file with cfg, sizes, seed, counters, both nets, optimizer; CPU).
+  - DQN target: `y = r + γ(1−done)·max_a Q_target(s′, a)`. DDQN: `a* = argmax_a Q_online(s′, a)`, `y = r + γ(1−done)·Q_target(s′, a*)`.
+- **Fake FIFO = Questa, cycle by cycle:** replaying 10,500 logged Questa cycles (`+UVM_VERBOSITY=UVM_HIGH`; seed 1 full run + seed 2, 300 cycles) through `fake_fifo.py` gives the same 7 flags on every cycle and the same 64 bin counts (checked with a script outside the repo; a repo test is still to add). This also closes the negedge sampling question.
+- **Results (fake FIFO, default config, 5 seeds × DQN and DDQN, test = 100 games of ≤ 40 runs, re-checked on 200 games of unseen seed 777):** DDQN closes 99.8%, DQN 100%, both in ~5.2–5.4 runs (median 5) and ~92 clock cycles (median) — vs random action 84% in 21.6 runs, always-70/30/10 63% in 21.4 runs, one long CRV run like `FIFO_test` 1 run of 343 cycles (median). AUC 0.99 vs 0.946. Learns in ~300–900 games; DQN ≈ DDQN (task too easy to separate them). Favourite actions: `L8_rand50`, `reset_with_traffic`, `baseline_random`, `L8_rd`, `L8_idle`.
+- **The agent has never run on real Questa.** The testbench cannot receive the agent's choice yet. Real Questa cost ≈ 3 s start-up per run → today 5 agent runs (~15 s) lose to 1 CRV run (~3 s). See the biggest risk in §9.
+- **Split since 2026-10-25:** Kenzy + Yasmeen redesign the actions as a plan file (`+PLAN_FILE=`, several blocks in one Questa run; DPI / cocotb later). The agent needs: the same env interface (`reset`, `step`, `state_size`, `n_actions`), **one block per step**, and to know when the reward arrives (only at plan end → raise `gamma`, lengthen `eps_decay_steps`). Agent code does not change. Details: `fifo_team_plan.md` §7.
+- Setup: `python3 -m venv ~/venvs/fifo_rl`, activate, `pip install torch --index-url https://download.pytorch.org/whl/cpu`, `pip install -r requirements.txt`, `pytest -q`. Run git from Windows only (WSL git shows line-ending noise on every file).
 
 ## Project Context
 - Graduation project with Siemens DISW: use a Reinforcement Learning agent to steer stimulus generation toward uncovered functional-coverage bins, so coverage closes in fewer simulation runs than plain constrained-random verification.
@@ -169,7 +183,7 @@ For the agent: FIFO_4 is the **constrained-random baseline** to beat; the plan's
 5. Optional: add a `rst_n` coverpoint (plan item FIFO_1).
 6. Discuss a richer coverage model (current `cg_FIFO` closes in ~500 random cycles).
 
-## 8. Build plan for the agent (steps 1, 2, 3 (except the per-cycle replay), 4, 5 and the parser half of step 10 are done, see "Code that exists" in section 9)
+## 8. Build plan for the agent (steps 1–9 and the parser half of step 10 are done — see STATUS at the top; left: Questa runner/backend, steps 10–12)
 
 **Step 6 done (2026-10-14, 135 tests pass):** random action each run closes 84% within 40 runs (mean 21.6 runs when it closes); always-`baseline_random` closes 63%; a greedy agent that knows each action's hit odds closes 100% in ~5 runs (the headroom for the DQN). One long 70/30/10 run like FIFO_test closes in a median of 343 cycles (95% by 654), in line with Questa's 400–500. Hardest bins for random: the 3 reset-only bins (cx_empty <1,0,1>, <1,1,1>, cx_underflow <1,1,1>), hit almost only by `reset_with_traffic` (p ≈ 0.98–1.0 per run) which a random agent picks 1 run in 22. **Next to implement: step 7, the DQN**, evaluated with `evaluation.run_episodes`/`summarize`; target: get close to the ~5-run greedy figure. Original step-6 plan, for reference: step 6 — `fifo_rl/agents/random_agent.py`, `fifo_rl/utils/logger.py`, `scripts/evaluate.py`, `scripts/plot.py`: run (i) a uniform-random-action agent and (ii) an always-`baseline_random` (id 21) agent on `CoverageEnv(FakeBackend(), budget=40)` over ≥ 20 seeds; log runs-to-64/64, closure rate and coverage-vs-runs (mean ± std). Fake-env numbers so far for (i): budget 20 closes 39%, budget 40 closes 84%, mean ≈ 25 runs. In parallel: step 7 (DQN, now directly on the real env, no dummy env needed) and step 10's `questa/runner.py` (testable with `run <N>us`).
 Order (fake env first; real Questa only when the verification team delivers the RL test):
@@ -187,22 +201,22 @@ Order (fake env first; real Questa only when the verification team delivers the 
 11. `backends/questa_backend.py` (Contract C, same `CoverageEnv`) once the RL test + plusargs exist; check fake vs real bins per action.
 12. Final comparison on real Questa (runs and wall-clock); logs + plots.
 
-Layout (top level `fifo_rl/`, next to `src codes/`; ✔ = exists 2026-10-14). One env + swappable backends replaced the planned `fake_fifo_env.py` / `questa_env.py` pair:
+Layout (top level `fifo_rl/`, next to `src codes/`; ✔ = exists 2026-10-26). One env + swappable backends replaced the planned `fake_fifo_env.py` / `questa_env.py` pair:
 ```
 fifo_rl/
-  requirements.txt ✔  README.md ✔  pyproject.toml ✔  configs/default.yaml
+  requirements.txt ✔  README.md ✔  pyproject.toml ✔  configs/default.yaml ✔
   fifo_rl/{coverage_model.py ✔, state.py ✔, actions.py ✔, fake_fifo.py ✔, reward.py ✔}
   fifo_rl/backends/{base.py ✔, fake_backend.py ✔, questa_backend.py}
   fifo_rl/envs/coverage_env.py ✔
   fifo_rl/questa/{report_parser.py ✔, runner.py}
-  fifo_rl/evaluation.py ✔
-  fifo_rl/agents/{random_agent.py ✔, dqn.py}
+  fifo_rl/{evaluation.py ✔, config.py ✔}
+  fifo_rl/agents/{random_agent.py ✔, replay_buffer.py ✔, schedules.py ✔, stub_agent.py ✔, networks.py ✔, dqn.py ✔}
   fifo_rl/utils/logger.py ✔
-  scripts/{evaluate.py ✔, plot.py ✔, train.py}
-  tests/ ✔ (11 test files, 135 tests) + tests/fixtures/ ✔
+  scripts/{evaluate.py ✔, plot.py ✔, train.py ✔}
+  tests/ ✔ (16 test files, 183 tests) + tests/fixtures/ ✔
   runs/   (git-ignored: sim dirs, logs, checkpoints)
 ```
-requirements.txt: `torch>=2.2` (CPU wheel: `--index-url https://download.pytorch.org/whl/cpu`), `numpy>=1.26`, `matplotlib>=3.8`, `pandas>=2.1`, `pyyaml>=6.0`, `tqdm>=4.66`, `pytest>=8.0`.
+requirements.txt (as of 2026-10-26): `numpy>=1.26`, `matplotlib>=3.8`, `pyyaml>=6.0`, `torch>=2.2` (install the CPU wheel first: `pip install torch --index-url https://download.pytorch.org/whl/cpu`), `pytest>=8.0`.
 Logging: CSV per step (episode, step, action, new_bins, total_bins, epsilon, loss); plots: coverage vs runs (agent vs random, mean ± std), learning curve, action histogram.
 
 ## 9. Open questions / risks
@@ -210,7 +224,7 @@ Logging: CSV per step (episode, step, action, new_bins, total_bins, epsilon, los
   (a) richer coverage model from the verification team (e.g. `count` value 0..8 × wr × rd, transitions such as full→empty, back-to-back overflow, reset at each fill level);
   (b) treat the FIFO as a **pipeline pilot**: prove the loop, parser, fake env and DQN work end-to-end here, and show coverage-closure gains on a harder DUT later.
 - At ~3 s per real run, 1,000 training runs ≈ 50 min → train mostly in the Python fake env; use Questa for validation/final comparison. (Possible speed-up later: keep one vsim alive and loop runs via Tcl.)
-- Monitor/driver sampling race at negedge: data (ignore bins never hit) agrees with the model in section 1; still worth one waveform check.
+- Monitor/driver sampling race at negedge: **closed 2026-10-14** — the section 1 model gives Questa's logged flags on every one of 10,500 cycles.
 - Reward granularity: bins (64) vs Questa % (16 items averaged) — bins preferred.
 - Since no FIFO state carries across runs, the MDP state is only cumulative coverage + last action + budget → the problem is close to a contextual bandit. DQN still works (use a small discount γ), but don't expect long-horizon planning to matter much.
 - `underflow = empty && rd_en` is combinational, so during reset it equals `rd_en`; cx_underflow (1,1,1) is only reachable this way. Plan FIFO_1 says reset clears underflow → ask the verification team whether that bin is intended.

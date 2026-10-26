@@ -10,6 +10,7 @@ buffer_capacity: 10000
 learning_starts: 500      # no gradient step before this many transitions are stored
 train_freq: 1             # one learn() call every train_freq env steps
 target_sync: 200          # hard copy online -> target every target_sync gradient steps
+grad_clip: 10.0           # gradient norm is cut to this size in every learn() step
 double: true              # true = DDQN, false = vanilla DQN
 
 # exploration (fifo_rl/agents/schedules.py)
