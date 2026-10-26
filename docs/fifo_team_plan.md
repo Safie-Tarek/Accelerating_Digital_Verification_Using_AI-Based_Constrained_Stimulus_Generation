@@ -12,10 +12,10 @@
 | Questa report parser | ✅ done |
 | Random baselines, logger, plots | ✅ done (`python -m scripts.evaluate`, `python -m scripts.plot`) |
 | DQN / DDQN — training side (Jana) | ✅ done and merged into `FIFO_RL_dev` (PR #1, `840da5a`): `ReplayBuffer`, ε schedules, `configs/default.yaml` + `config.py`, `scripts/train.py`, `evaluate.py --agents dqn --checkpoint`, `plot.py --train`, `StubAgent` |
-| DQN / DDQN — agent core (Mohamed, `feat/ddqn-core`) | ✅ done (`7a48fea`): `agents/networks.py` (`QNetwork`), `agents/dqn.py` (`DQNAgent`, DQN/DDQN via `double`), `tests/test_networks.py` + `tests/test_dqn.py` (23 tests), `torch>=2.2` in `requirements.txt`, new config key `grad_clip: 10.0`. Not yet merged into `FIFO_RL_dev` |
+| DQN / DDQN — agent core (Mohamed, `feat/ddqn-core`) | ✅ done (`7a48fea`): `agents/networks.py` (`QNetwork`), `agents/dqn.py` (`DQNAgent`, DQN/DDQN via `double`), `tests/test_networks.py` + `tests/test_dqn.py` (23 tests), `torch>=2.2` in `requirements.txt`, new config key `grad_clip: 10.0`. Merged into `FIFO_RL_dev` (PR #2, `63f51a7`) |
 | Questa runner + Questa backend | ⏳ not started; the real loop also waits for the testbench to accept the agent's choice (§7) |
 
-183 tests pass on `feat/ddqn-core`.
+183 tests pass on `FIFO_RL_dev`.
 
 **First training results (2026-10-26, fake FIFO, default config, 5 seeds each, ~9 min for all 10 trainings on CPU).** Test = 100 games of up to 40 runs (seed 0), re-checked on 200 games with an unseen seed (777) — same picture:
 
@@ -32,7 +32,7 @@
 - Small tuning notes: ε ends at ~0.13 (only ~27.6k of the 30k decay steps happen in 3000 games); one DDQN test game took 39 runs (rare tail).
 - **Honest caveat:** in real Questa a run costs ~3 s of start-up whatever its length. Today the agent's 5 short runs (~15 s) lose to one long CRV run (~3 s). With a plan file (many blocks in ONE run, §7) it becomes 1 run vs 1 run: the agent wins on cycles (92 vs 343) but both cost ~3 s. Winning on time needs richer coverage or a bigger design (§5).
 
-**Next:** merge `feat/ddqn-core` into `FIFO_RL_dev` (Mohamed); new plan-based actions (Kenzy + Yasmeen, §7); Questa runner/backend; decision on the "too easy" risk (§5).
+**Next:** new plan-based actions (Kenzy + Yasmeen, §7); Questa runner/backend; decision on the "too easy" risk (§5).
 
 ## 1. The idea in one picture
 
@@ -228,7 +228,7 @@ Until Jana's buffer is merged: a ~10-line list-based stub buffer returning the s
 ### 6.4 Merge and done-criteria
 1. Both open PRs into `FIFO_RL_dev`; Mohamed merges buffer/schedules first, then the core, and removes his stub buffer.
 2. Joint integration check: `python -m scripts.train --double false` and `--double true` over ≥ 5 seeds, then `scripts.evaluate` for dqn / ddqn / random / fixed with budget 40, and `scripts.plot`.
-3. Done when DQN and DDQN beat the random-scenario baseline (84% closure, mean 21.6 runs) on runs-to-close and area under the coverage curve, aiming at the ~5-run greedy figure. **✅ Met 2026-10-26** (results in §0). Steps 1 and 2 are done; only merging `feat/ddqn-core` into `FIFO_RL_dev` is left (Mohamed).
+3. Done when DQN and DDQN beat the random-scenario baseline (84% closure, mean 21.6 runs) on runs-to-close and area under the coverage curve, aiming at the ~5-run greedy figure. **✅ Met 2026-10-26** (results in §0). All three steps are done; `feat/ddqn-core` merged into `FIFO_RL_dev` (PR #2, `63f51a7`).
 
 Reproduce (Ubuntu, in `fifo_rl/`; results go to the git-ignored `runs/`):
 ```bash
