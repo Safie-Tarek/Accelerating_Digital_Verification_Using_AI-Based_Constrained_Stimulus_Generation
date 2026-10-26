@@ -16,6 +16,8 @@ RL agent for the FIFO testbench in `../src codes/`. Work in progress: state, act
 | `fifo_rl/utils/logger.py` | `CsvLogger`: one CSV row per run, same columns for every agent |
 | `fifo_rl/agents/replay_buffer.py` | `ReplayBuffer`: numpy ring buffer, `push` / `sample(B) -> Batch` (Contract E) |
 | `fifo_rl/agents/schedules.py` | ε schedules: `LinearEpsilon`, `ExpEpsilon`, `make_schedule(cfg)` |
+| `fifo_rl/agents/networks.py` | `QNetwork`: MLP state → one Q-value per action (87 → 128 → 128 → 22 by default) |
+| `fifo_rl/agents/dqn.py` | `DQNAgent`: ε-greedy `act`, `observe`, `learn` (DQN or DDQN target, Huber loss, target net), `save` / `load` |
 | `fifo_rl/agents/stub_agent.py` | `StubAgent`: Contract E interface without learning, for tests and plumbing checks |
 | `configs/default.yaml`, `fifo_rl/config.py` | DQN / DDQN settings; `load_config`, CLI overrides (`--double false`) |
 | `scripts/train.py` | Train DQN / DDQN on the fake FIFO, greedy evaluation every `eval_every` episodes, checkpoints |
@@ -32,9 +34,12 @@ The report must be created with `vcover report -cvg -details -nocompactcrossbins
 python3 -m venv ~/venvs/fifo_rl
 source ~/venvs/fifo_rl/bin/activate
 cd fifo_rl
+pip install torch --index-url https://download.pytorch.org/whl/cpu   # CPU-only PyTorch, before the line below
 pip install -r requirements.txt
 pytest -q
 ```
+
+Install the CPU build of PyTorch first: a plain `pip install torch` on Linux downloads the much larger GPU build.
 
 ## Random baselines
 
