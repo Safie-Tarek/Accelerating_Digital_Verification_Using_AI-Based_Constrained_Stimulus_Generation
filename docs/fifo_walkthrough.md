@@ -462,31 +462,61 @@ Because nothing carries over between runs except which boxes are ticked, this is
 | 1 | Create the project folder, virtual env, `requirements.txt` — **done 2026-10-13** | Empty skeleton that installs | No |
 | 2 | `coverage_model.py`: list the 64 bins in a fixed order, names matching the Questa report — **done 2026-10-13**, together with `state.py` (the state encoder: 64 bin flags + budget left + last action = 87 numbers) | One shared definition of the state vector | No |
 | 3 | **Fake FIFO env** in Python: the counter rules + flag rules + sampling, ticking the 64 bins — **done 2026-10-14** (`fake_fifo.py` + `backends/fake_backend.py`, ~0.4 ms per run) | Simulates thousands of runs per second | No |
-| 3b | **Exact check vs Questa:** run Questa once with `+UVM_VERBOSITY=UVM_HIGH` (the monitor then prints every cycle's inputs and flags), replay those exact inputs through the fake FIFO, and require the same flags every cycle and the same bin hit counts (seed 1: `cp_wr_en` 3171/7029, `cx_full <0,0,1>` = 163) — **partly done:** the fake FIFO ticks the same 36 bins as the real seed-1 100-cycle report; the per-cycle replay still needs the UVM_HIGH log | Proof the fake matches the real thing | One run |
+| 3b | **Exact check vs Questa:** run Questa once with `+UVM_VERBOSITY=UVM_HIGH` (the monitor then prints every cycle's inputs and flags), replay those exact inputs through the fake FIFO, and require the same flags every cycle and the same bin hit counts (seed 1: `cp_wr_en` 3171/7029, `cx_full <0,0,1>` = 163) — **done (2026-10-14/25):** 10,500 logged Questa cycles (seed 1 full run + seed 2, 300 cycles) replayed through `fake_fifo.py` give the same 7 flags on every cycle and the same 64 bin counts (checked with a script outside the repo; a repo test is still to add) | Proof the fake matches the real thing | One run |
 | 4 | `actions.py`: turn each of the 22 scenarios into a list of (rst_n, wr_en, rd_en) per cycle, always starting with reset — **done 2026-10-14** (also `to_plusargs()` for the future Questa test) | The action space | No |
 | 5 | Env interface: `reset()` → state; `step(action)` → (state, reward, done, info) — **done 2026-10-14** (`envs/coverage_env.py` + `reward.py`; works with any backend; 117 tests pass) | Gym-style game | No |
 | 6 | **Random baselines**: (i) random scenario each turn, (ii) plain 70/30/10 random runs. Plot coverage vs number of runs, averaged over ≥ 20 seeds — **done 2026-10-14** (`agents/random_agent.py`, `evaluation.py`, `utils/logger.py`, `scripts/evaluate.py`, `scripts/plot.py`). Results (100 episodes, budget 40): random action each run closes 84% within 40 runs (mean 21.6 runs when it closes); always-`baseline_random` closes 63%; a greedy agent that knows each action's hit odds closes 100% in ~5 runs (the headroom for the DQN). One long 70/30/10 run like FIFO_test closes in a median of 343 cycles (95% by 654), in line with Questa's 400–500 | The bar the agent must beat | No |
-| 7 | **DQN**: MLP 87 → 128 → 128 → 22, replay buffer 10k, batch 64, Adam lr 1e-3, γ ≈ 0.9, ε 1.0 → 0.05, target sync every ~200 steps, Huber loss | First learning agent | No |
-| 8 | **DDQN** upgrade | More stable Q-values | No |
-| 9 | Compare agent vs random on the fake env: runs-to-100%, area under the coverage curve | First results + plots | No |
+| 7 | **DQN**: MLP 87 → 128 → 128 → 22, replay buffer 10k, batch 64, Adam lr 1e-3, γ ≈ 0.9, ε 1.0 → 0.05, target sync every ~200 steps, Huber loss — **done 2026-10-26**: Jana built the memory, ε schedule, config and `scripts/train.py`; Mohamed built `agents/networks.py` (`QNetwork`) and `agents/dqn.py` (`DQNAgent`) | First learning agent | No |
+| 8 | **DDQN** upgrade — **done 2026-10-26**: same `DQNAgent`, switched with `double: true` (default) / `false` in `configs/default.yaml` | More stable Q-values | No |
+| 9 | Compare agent vs random on the fake env: runs-to-100%, area under the coverage curve — **done 2026-10-26**, see "Results" below | First results + plots | No |
 | 10 | Questa runner + report parser (`subprocess` → `vsim`/`vcover` → 64-bin vector). Testable now using `run <N>us` and saved reports — **parser done 2026-10-13** (`questa/report_parser.py`, tested on 4 real reports); the runner is still to do | Bridge to the real simulator | Yes |
 | 11 | `backends/questa_backend.py` (plugs into the same `CoverageEnv`) once the RL test + plusargs exist; check fake vs real bins for each action | Real file-based loop | Yes (+ verification team) |
 | 12 | Final comparison on real Questa (runs and wall-clock time), logs and plots | Project results | Yes |
 
-**Where we are (2026-10-14):** steps 1–6 are done: the game is playable on the fake FIFO and the random baselines are measured. **Next:** step 7 (DQN) on `CoverageEnv(FakeBackend())`, evaluated with the same `evaluation.run_episodes` / `summarize` so its numbers sit next to the baselines. The Questa runner (step 10) can be built in parallel with `run <N>us`.
+**Where we are (2026-10-26):** steps 1–9 are done: the agent plays and learns on the fake FIFO and clearly beats random. **The agent has not run on real Questa yet**: the testbench cannot receive its choice. Kenzy + Yasmeen are redesigning the actions as a plan file (`+PLAN_FILE=`, several blocks in one Questa run) — that is the missing link for steps 11–12. The Questa runner (step 10) can be built in parallel.
+
+### Results (2026-10-26, fake FIFO)
+How the agent plays one turn: 87 numbers → `QNetwork` → 22 scores → pick the best (or, with chance ε, a random one) → run it on the fake FIFO → reward → store the turn in memory → learn from 64 random past turns. It trains on 3000 games of up to 20 runs and is tested on games of up to 40 runs, with no exploring.
+
+5 seeds each for DQN and DDQN (~9 min for all 10 trainings on CPU), tested on 100 games and again on 200 games with an unseen seed:
+
+| Agent | Games closed (64/64) | Runs to close | Clock cycles to close |
+|---|---|---|---|
+| Random action each run | 84% | ~22 | — |
+| Always plain random 70/30/10 (short runs) | 63% | ~21 | — |
+| One long random run like `FIFO_test` (CRV) | 100% | 1 | ~343 |
+| **DDQN** | **~100%** | **~5** | **~92** |
+| **DQN** | **100%** | **~5** | **~92** |
+
+- The agent learns this after ~300–900 training games. DQN and DDQN tie here: the task is too easy to show DDQN's advantage.
+- It mostly picks "fill to full, then 50/50 traffic", "reset with traffic" (the only way to tick the reset-only boxes), plain random, "full then read" and "full then idle".
+- **Honest caveat:** a real Questa run costs ~3 s of start-up whatever its length, so today the agent's 5 short runs (~15 s) lose to one long random run (~3 s). With the plan file it becomes 1 run vs 1 run: the agent needs ~4× fewer cycles, but both runs cost ~3 s. To win on time too we need richer coverage or a bigger design (see "Biggest risk" in section 4).
+
+Run it yourself (Ubuntu, in `fifo_rl/`):
+```bash
+python -m scripts.train                       # DDQN, ~3-5 min -> runs/train/ddqn_seed0/
+python -m scripts.train --double false        # DQN            -> runs/train/dqn_seed0/
+python -m scripts.evaluate --agents random fixed dqn --checkpoint runs/train/ddqn_seed0/best.pt
+python -m scripts.plot --train runs/train/ddqn_seed* runs/train/dqn_seed*
+```
+
+### When the new plan-based actions arrive
+- **No change:** network, agent, memory, ε schedule, training/evaluation/plot scripts — they read the number of actions and the state size from the env.
+- **Their side:** the blocks, the plan-file writer, the env and a Questa backend, keeping `reset()` / `step()` and **one block per step**.
+- **Our side:** maybe raise γ (e.g. 0.99) and slow the ε decay if the reward only comes at the end of a plan (config only), then retrain and re-test.
 
 ### Logging and plots
 - CSV per step: episode, step, action, new_bins, total_bins, epsilon, loss.
 - Plots: coverage vs runs (agent vs random, mean ± std over seeds), learning curve (episode return), action histogram (which scenarios the agent prefers).
 
-### Folder structure (✔ = exists, 2026-10-14; the rest is still to write)
+### Folder structure (✔ = exists, 2026-10-26; the rest is still to write)
 The original plan had one env class per simulator (`fake_fifo_env.py`, `questa_env.py`). As built, there is **one** env (`coverage_env.py`) and the simulator is a swappable **backend** — so step 11 becomes "write `questa_backend.py`", not a second env.
 ```
 fifo_rl/
   requirements.txt              ✔
   README.md                     ✔
   pyproject.toml                ✔
-  configs/default.yaml          # actions, budget, hyper-parameters
+  configs/default.yaml          ✔ DQN / DDQN settings (fifo_rl/config.py loads them)
   fifo_rl/
     coverage_model.py           ✔ the 64 bins (fixed order)
     state.py                    ✔ 87-number state encoder
@@ -505,25 +535,27 @@ fifo_rl/
       runner.py                 # vlog / vsim / vcover calls
     agents/
       random_agent.py           ✔ baselines
-      dqn.py                    # DQN + DDQN, replay buffer, target net, ε-greedy
+      replay_buffer.py          ✔ memory of past turns (Jana)
+      schedules.py              ✔ ε schedules (Jana)
+      stub_agent.py             ✔ non-learning stand-in for tests (Jana)
+      networks.py               ✔ QNetwork: 87 → 128 → 128 → 22 (Mohamed)
+      dqn.py                    ✔ DQNAgent: DQN + DDQN, target net, ε-greedy, save/load (Mohamed)
     utils/logger.py             ✔ CSV logging
   scripts/
     evaluate.py                 ✔ baselines → CSV + summary JSON
-    plot.py                     ✔ coverage-vs-runs + runs-to-close plots
-    train.py
-  tests/                        ✔ test_{coverage_model,state,actions,fake_fifo,fake_backend,reward,coverage_env,report_parser}.py
+    plot.py                     ✔ coverage-vs-runs, runs-to-close, learning-curve plots
+    train.py                    ✔ training loop + checkpoints (Jana)
+  tests/                        ✔ 16 test files, 183 tests (incl. test_networks.py, test_dqn.py)
     fixtures/                   ✔ 4 real Questa reports
   runs/                         # git-ignored: sim folders, logs, checkpoints
 ```
 
-### Proposed `requirements.txt` (today the file has only `numpy` and `pytest`; the rest is added when it is first needed)
+### `requirements.txt` (as of 2026-10-26)
 ```
-torch>=2.2        # CPU build: pip install torch --index-url https://download.pytorch.org/whl/cpu
 numpy>=1.26
 matplotlib>=3.8
-pandas>=2.1
 pyyaml>=6.0
-tqdm>=4.66
+torch>=2.2        # install the CPU build first: pip install torch --index-url https://download.pytorch.org/whl/cpu
 pytest>=8.0
 ```
 Works with Python 3.10 (WSL) and 3.12 (Windows).

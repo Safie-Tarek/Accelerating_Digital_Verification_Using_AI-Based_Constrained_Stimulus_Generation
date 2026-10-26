@@ -1,21 +1,38 @@
 # FIFO RL Agent — Team Work Split (4 members)
 
-## 0. Status (2026-10-25)
+## 0. Status (2026-10-26)
 
 | Piece | State |
 |---|---|
 | Contract A — bin list (`coverage_model.py`) | ✅ done |
-| Contract B — 22 actions (`actions.py`) | ✅ done (plusarg names still to agree with the verification team) |
+| Contract B — 22 actions (`actions.py`) | ✅ done (plusarg names still to agree with the verification team) · 🔨 being redesigned as a plan file (Kenzy + Yasmeen, §7) |
 | Contract C — backend (`backends/base.py`, `backends/fake_backend.py`) | ✅ fake backend done (~0.4 ms/run) · ⏳ Questa backend not started |
 | Contract D — env (`envs/coverage_env.py`, `state.py`, `reward.py`) | ✅ done (new reward needs team approval) |
-| Fake FIFO (`fake_fifo.py`) | ✅ done; matches the real 100-cycle report (36 bins) · ⏳ per-cycle replay needs the UVM_HIGH log |
+| Fake FIFO (`fake_fifo.py`) | ✅ done; checked cycle by cycle against 10,500 logged Questa cycles (seed 1 full run + seed 2, 300 cycles): same 7 flags on every cycle, same 64 bin counts (done with a script outside the repo; a repo test is still to add) |
 | Questa report parser | ✅ done |
 | Random baselines, logger, plots | ✅ done (`python -m scripts.evaluate`, `python -m scripts.plot`) |
-| DQN / DDQN — training side (Jana, `feat/ddqn-training`) | ✅ done, not yet merged: `ReplayBuffer`, ε schedules, `configs/default.yaml` + `config.py`, `scripts/train.py`, `evaluate.py --agents dqn --checkpoint`, `plot.py --train`, `StubAgent`; tested end to end with the stub (3000 episodes ≈ 54k steps ≈ 24 s) |
-| DQN / DDQN — agent core (Mohamed, `feat/ddqn-core`) | 🔨 in progress: `networks.py`, `dqn.py` (`DQNAgent`), DDQN switch, `test_dqn.py`; needs `torch` added to `requirements.txt` |
-| Questa runner | ⏳ not started (can start now with `run <N>us`) |
+| DQN / DDQN — training side (Jana) | ✅ done and merged into `FIFO_RL_dev` (PR #1, `840da5a`): `ReplayBuffer`, ε schedules, `configs/default.yaml` + `config.py`, `scripts/train.py`, `evaluate.py --agents dqn --checkpoint`, `plot.py --train`, `StubAgent` |
+| DQN / DDQN — agent core (Mohamed, `feat/ddqn-core`) | ✅ done (`7a48fea`): `agents/networks.py` (`QNetwork`), `agents/dqn.py` (`DQNAgent`, DQN/DDQN via `double`), `tests/test_networks.py` + `tests/test_dqn.py` (23 tests), `torch>=2.2` in `requirements.txt`, new config key `grad_clip: 10.0`. Not yet merged into `FIFO_RL_dev` |
+| Questa runner + Questa backend | ⏳ not started; the real loop also waits for the testbench to accept the agent's choice (§7) |
 
-160 tests pass on `feat/ddqn-training` (135 on `FIFO_RL_dev`). Baseline results (fake FIFO, 100 episodes, budget 40): random action each run closes 84% within 40 runs (mean 21.6 runs when it closes); always-`baseline_random` closes 63%; a greedy agent that knows each action's hit odds closes 100% in ~5 runs (the headroom for the DQN). One long 70/30/10 run like FIFO_test closes in a median of 343 cycles (95% by 654), in line with Questa's 400–500. **Next part to build: the DQN/DDQN agent core (Mohamed, §6.2)**; the training side (§6.3) is ready and waits for `DQNAgent` to plug into `scripts/train.py`. Open points for Mohamed: `eps_decay_steps` set to 30 000 (ε reaches 0.05 around episode 1650); `train.py` calls `learn()` every `train_freq` steps, the agent returns `None` until `learning_starts` and counts its steps in `observe()`; `best.pt` is picked on validation episodes (seed + 1000), separate from the seed-0 test episodes of `scripts.evaluate`; new key `eps_schedule` (`linear` / `exp`); new keys such as gradient clipping must be added to `default.yaml` (unknown keys are rejected); `summarize()` now also reports `coverage_auc`. The Questa runner (Member 4) can be built at the same time.
+183 tests pass on `feat/ddqn-core`.
+
+**First training results (2026-10-26, fake FIFO, default config, 5 seeds each, ~9 min for all 10 trainings on CPU).** Test = 100 games of up to 40 runs (seed 0), re-checked on 200 games with an unseen seed (777) — same picture:
+
+| Agent | Games closed (64/64) | Runs to close (mean, median) | Clock cycles to close (median) | Coverage AUC |
+|---|---|---|---|---|
+| Random action each run | 84% | 21.6, 20.5 | — | 0.946 |
+| Always `baseline_random` (70/30/10, short runs) | 63% | 21.4, 21 | — | 0.963 |
+| One long 70/30/10 run like `FIFO_test` (CRV) | 100% | 1 run | 343 | — |
+| **DDQN** | **99.8%** | **5.3, 5** | **92** | **0.99** |
+| **DQN** | **100%** | **5.2, 5** | **92** | **0.99** |
+
+- The agent learns this in ~300–900 training games (3000 is more than enough) and reaches the ~5-run greedy figure. DQN ≈ DDQN: the task is too easy to separate them.
+- Favourite actions: `L8_rand50`, `reset_with_traffic`, `baseline_random`, `L8_rd`, `L8_idle`, `L0/L1_rand50`.
+- Small tuning notes: ε ends at ~0.13 (only ~27.6k of the 30k decay steps happen in 3000 games); one DDQN test game took 39 runs (rare tail).
+- **Honest caveat:** in real Questa a run costs ~3 s of start-up whatever its length. Today the agent's 5 short runs (~15 s) lose to one long CRV run (~3 s). With a plan file (many blocks in ONE run, §7) it becomes 1 run vs 1 run: the agent wins on cycles (92 vs 343) but both cost ~3 s. Winning on time needs richer coverage or a bigger design (§5).
+
+**Next:** merge `feat/ddqn-core` into `FIFO_RL_dev` (Mohamed); new plan-based actions (Kenzy + Yasmeen, §7); Questa runner/backend; decision on the "too easy" risk (§5).
 
 ## 1. The idea in one picture
 
@@ -74,7 +91,7 @@ Tasks:
 1. `fifo_rl/coverage_model.py` — **already written (2026-10-13) — don't rewrite it; pull `FIFO_RL_dev` to get it.** Contract A (64 bin names + index map). Get the exact names/order from a Questa report (the first block of `vcover report -cvg -details -nocompactcrossbins`; the report prints the covergroup twice).
 2. `fifo_rl/fake_fifo.py` — **done 2026-10-14.** The per-cycle model from `fifo_agent_context.md` §1 (count rules + flags + how the monitor samples). Input: list of `(rst_n, wr_en, rd_en)` per cycle; output: 64-bin hit vector (`hits`) + hit counts (`bin_hit_counts`).
 3. `fifo_rl/backends/fake_backend.py` — **done 2026-10-14.** Contract C (uses the actions to build the cycle list, then the model; ~0.4 ms/run).
-4. **Exact validation** (**still open** — the bin set already matches the real seed-1 100-cycle report; the per-cycle replay is what remains) (`tests/test_fake_fifo.py` + a replay script): get one Questa log with `+UVM_VERBOSITY=UVM_HIGH` (Member 4 produces it — the monitor prints every cycle), replay those inputs through the fake FIFO, and require **identical bin hit counts** (seed 1 full run: `cp_wr_en` 3171/7029, `cx_full <0,0,1>` = 163).
+4. **Exact validation** (**done as a check outside the repo** — 10,500 logged Questa cycles replayed through `fake_fifo.py`: same flags every cycle, same 64 bin counts; turning it into a repo test is what remains) (`tests/test_fake_fifo.py` + a replay script): get one Questa log with `+UVM_VERBOSITY=UVM_HIGH` (Member 4 produces it — the monitor prints every cycle), replay those inputs through the fake FIFO, and require **identical bin hit counts** (seed 1 full run: `cp_wr_en` 3171/7029, `cx_full <0,0,1>` = 163).
 
 Needs: one Questa log from Member 4 (no Questa licence needed on your own PC).
 Done when: replay test passes exactly; `run()` takes < 1 ms per scenario.
@@ -141,7 +158,7 @@ Done when: `run(action_id, seed)` returns the right 64-bin vector from a real si
 
 ## 5. Open items for the whole team
 - Engineer: is "Python in WSL + Windows Questa" OK, or must Questa run on Linux? (Code is ready for either — one config change.)
-- Supervisors: the current covergroup is closed by plain random in one ~3 s run, so RL can't fairly beat random on it. Decide: FIFO as **pipeline pilot** and/or ask the verification team for a **richer coverage model**.
+- Supervisors: the current covergroup is closed by plain random in one ~3 s run, so RL can't fairly beat random on it. Decide: FIFO as **pipeline pilot** and/or ask the verification team for a **richer coverage model**. (Confirmed by the 2026-10-26 results in §0: the agent needs ~4× fewer cycles than CRV, but on this covergroup Questa start-up time, not cycles, is the real cost.)
 - Approve the 22 actions, the 87-number state and the reward: (new bins − 1 + 10 on the closing run) / 64, see `fifo_rl/reward.py` (was new bins − 0.1; `LEGACY_REWARD` keeps the old one).
 
 ---
@@ -189,6 +206,13 @@ buf.sample(batch_size) -> Batch(states f32 (B,87), actions i64 (B,), rewards f32
 
 Until Jana's buffer is merged: a ~10-line list-based stub buffer returning the same `Batch`.
 
+**✅ Done 2026-10-26 (`7a48fea`)** — built directly on Jana's merged buffer (no stub needed). As built:
+- `QNetwork(state_dim, hidden, n_actions)`: Linear + ReLU per size in `cfg["hidden"]`, then a plain Linear to `n_actions`.
+- `DQNAgent(state_dim, n_actions, cfg, buffer=None, epsilon_schedule=None, seed=0)`; `steps` = `observe()` calls, `updates` = gradient steps. `learn()` returns `None` until `len(buffer) >= max(learning_starts, batch_size)`, then: Huber loss → clip gradient norm to `grad_clip` → Adam step → copy online → target every `target_sync` **gradient steps**. `epsilon` is `0.0` without a schedule.
+- `save(path)` writes one torch file (cfg, sizes, seed, counters, both nets, optimizer); `DQNAgent.load(path)` needs nothing else (CPU, `weights_only=True`).
+- New config key `grad_clip: 10.0` in `default.yaml` (other config files get it from the defaults automatically; override with `--grad-clip 5`).
+- Tests (15 in `test_dqn.py`, 8 in `test_networks.py`) include the DQN vs DDQN target worked out by hand (online scores [1, 2], target scores [5, 3], r = 1, γ = 0.9 → DQN 5.5, DDQN 3.7, done → 1.0) and a real `train.train` + `evaluate.main --agents dqn` run. 7 deliberately broken versions of `dqn.py` were each caught by at least one test.
+
 ### 6.3 Jana — branch `feat/ddqn-training`
 
 | File | Contents |
@@ -204,4 +228,28 @@ Until Jana's buffer is merged: a ~10-line list-based stub buffer returning the s
 ### 6.4 Merge and done-criteria
 1. Both open PRs into `FIFO_RL_dev`; Mohamed merges buffer/schedules first, then the core, and removes his stub buffer.
 2. Joint integration check: `python -m scripts.train --double false` and `--double true` over ≥ 5 seeds, then `scripts.evaluate` for dqn / ddqn / random / fixed with budget 40, and `scripts.plot`.
-3. Done when DQN and DDQN beat the random-scenario baseline (84% closure, mean 21.6 runs) on runs-to-close and area under the coverage curve, aiming at the ~5-run greedy figure.
+3. Done when DQN and DDQN beat the random-scenario baseline (84% closure, mean 21.6 runs) on runs-to-close and area under the coverage curve, aiming at the ~5-run greedy figure. **✅ Met 2026-10-26** (results in §0). Steps 1 and 2 are done; only merging `feat/ddqn-core` into `FIFO_RL_dev` is left (Mohamed).
+
+Reproduce (Ubuntu, in `fifo_rl/`; results go to the git-ignored `runs/`):
+```bash
+python -m scripts.train --seed 0                    # DDQN -> runs/train/ddqn_seed0/   (~3-5 min)
+python -m scripts.train --double false --seed 0     # DQN  -> runs/train/dqn_seed0/
+python -m scripts.evaluate --agents random fixed dqn --checkpoint runs/train/ddqn_seed0/best.pt
+python -m scripts.plot --train runs/train/ddqn_seed* runs/train/dqn_seed*   # learning_curve.png, loss_epsilon.png
+```
+
+---
+
+## 7. Next: plan-based actions — Kenzy + Yasmeen (added 2026-10-26)
+
+Agreed 2026-10-25: Kenzy + Yasmeen redesign the actions as a **plan file**: several stimulus blocks in **one** Questa run, passed with `+PLAN_FILE=<file>` (DPI / cocotb maybe later). Mohamed + Jana built the agent on the old 22 actions in the meantime (§6).
+
+**What does NOT change** — the agent reads its sizes from the env (`env.state_size`, `env.n_actions`), nothing is hard-coded: `networks.py`, `dqn.py`, replay buffer, ε schedules, `train.py`, `evaluate.py`, `plot.py`.
+
+**What the agent side needs from the new design:**
+1. The same env interface (Contract D): `reset() -> state`, `step(action) -> (state, reward, done, info)`, plus `state_size` and `n_actions`.
+2. **One block per step**: the agent picks block 1, then block 2, … (each `step` adds one block). If a whole plan must be chosen in one go, DQN does not fit — talk to Mohamed first.
+3. Say **when the reward arrives**. If only at the end of a plan (one simulation per full plan), we raise `gamma` (e.g. 0.99) and lengthen `eps_decay_steps` — config only.
+4. Keep Contract C for the bins: a backend returning the 64 bins as `bool[64]`; `questa/report_parser.py` already turns a real report into that vector.
+
+**Then, on the agent side:** retrain + re-evaluate (§6.4 commands), check fake vs real bins per block, final comparison on real Questa (runs **and** wall-clock time).
