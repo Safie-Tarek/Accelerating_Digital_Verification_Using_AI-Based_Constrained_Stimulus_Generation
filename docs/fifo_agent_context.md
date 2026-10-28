@@ -1,8 +1,92 @@
 # FIFO RL Agent — Technical Context (team copy)
 
-> The AI team's shared working notes. It holds everything the DQN agent needs from the FIFO testbench in `src codes/` and `FIFO Plan.xlsx`. For a gentler, step-by-step explanation read [`fifo_walkthrough.md`](fifo_walkthrough.md); for who builds what, read [`fifo_team_plan.md`](fifo_team_plan.md). Last updated: 2026-10-26.
+> The AI team's shared working notes. It holds everything the DQN agent needs from the FIFO testbench in `src codes/` and `FIFO Plan.xlsx`. For a gentler, step-by-step explanation read [`fifo_walkthrough.md`](fifo_walkthrough.md); for who builds what, read [`fifo_team_plan.md`](fifo_team_plan.md). Last updated: 2026-10-27.
 
-## STATUS 2026-10-26 (newest — read this first; older notes below are history)
+## STATUS 2026-10-27 — plan-based campaign (newest — read this first)
+
+**Why a new design.** With the 22 actions, every action is one Questa run (~3 s start-up), so 5 agent runs (~15 s) lose to one constrained-random run (~3 s). New design: **one Questa run = one test plan made of several action blocks**, run back to back **without a reset between blocks** (the FIFO keeps its fill level). The old 22-action env (`actions.py`, `state.py`, `envs/`, `backends/`, `scripts/train.py`) is kept unchanged for comparison; the new code lives in new packages. **The DQN agent is not changed** (`DQNAgent`, `QNetwork`, replay buffer, schedules): it only sees new sizes (93 → 9).
+
+**Two steps:**
+1. **Step 1 (this commit):** Questa gives **one coverage report per test** (`cg_FIFO` only — no per-action coverage in the testbench). The coverage reward of the test goes to the plan's last step (`END_TEST`); each block only pays its own cycle cost. Goal: measure simulation time, cycles per test and how the agent behaves.
+2. **Step 2 (later):** the testbench stamps every transaction with `action_idx` and keeps one covergroup instance per block (`act_0`, `act_1`, … next to `cg_FIFO`) → a reward per block. Then compare step 1 vs step 2 (tests to close, cycles, wall-clock, learning speed).
+
+**Actions = 9 blocks** (`fifo_rl/plan/actions.py`; one block = one line of the plan; no `level`, no reset of its own):
+
+| id | name | wr % | rd % | rst % | cycles | why |
+|---|---|---|---|---|---|---|
+| 0 | RESET | 0 | 0 | 100 | 2 | back to count 0 without starting a new test |
+| 1 | IDLE | 0 | 0 | 0 | 4 | hold the current level (idle while full / almostfull / almostempty) |
+| 2 | WRITE | 100 | 0 | 0 | 10 | fills an empty FIFO into overflow |
+| 3 | READ | 0 | 100 | 0 | 10 | drains a full FIFO into underflow |
+| 4 | WRITE_READ | 100 | 100 | 0 | 4 | from empty → count 1, from full → count 7, else holds the level |
+| 5 | RAND50 | 50 | 50 | 0 | 10 | random wr/rd around the current level |
+| 6 | RESET_TRAFFIC | 50 | 50 | 100 | 16 | random wr/rd while reset is held: the only way to the 3 reset-only bins |
+| 7 | BASELINE | 70 | 30 | 10 | 18 | the plan's FIFO_4 recipe (constrained random) |
+| 8 | END_TEST | – | – | – | 0 | closes the plan; no cycles |
+
+**Plan file** (written by `TextPlanWriter`, read by the UVM test through `+PLAN_FILE=<path>`; `name` is for people, the UVM can ignore it):
+```
+PLAN id=12 seed=3141592653 version=1
+ACT idx=0 name=WRITE wr=100 rd=0 rst=0 cycles=10
+ACT idx=1 name=IDLE wr=0 rd=0 rst=0 cycles=4
+END_TEST
+```
+The test always applies **one reset cycle before the first block** (the DUT's count starts as X). A plan that is full (`plan_max_len` blocks) gets `END_TEST` added automatically; an `END_TEST` chosen first gives an empty test (only the reset cycle) that still costs a whole run.
+
+**State = 93 numbers** (`fifo_rl/plan/state_encoder.py`): [0:64] bins covered in the campaign so far · [64:91] last 3 blocks of this plan, one-hot 3 × 9 (newest first, zeros where there is none) · [91] blocks in this plan ÷ `plan_max_len` · [92] tests left ÷ campaign budget. No legality mask.
+
+**Episode / steps / reward (step 1):**
+- Episode = one **campaign** of up to `campaign_budget` tests; it ends at 64/64 or when the tests are used up (`done`).
+- One DQN step = **one block** of a plan; one transition per block: `(state when chosen, block, reward, state of the next choice, done)`. The next state of `END_TEST` is the first state of the next test (coverage already updated).
+- Reward of block k = `−cycle_cost · cycles_k · scale`; reward of `END_TEST` = `reward.compute_reward(new bins of the whole test, closed_now)` (= `(new − step_cost + closure_bonus·[closed]) / 64`, so one *test* costs one bin, exactly like one run before) + its own cycle cost (0). `cycle_cost` defaults to 0 → the agent is judged on **number of tests** (Questa start-up dominates); set it > 0 to also charge cycles.
+- The reward arrives only at the end of a plan → train with `gamma 0.99` and a longer `eps_decay_steps` (config overrides, no code change).
+
+**Classes (new code, see `fifo_rl/README.md`):**
+
+| File | Class | Role |
+|---|---|---|
+| `fifo_rl/plan/actions.py` | `ActionSpec`, `ACTIONS`, `END_TEST_ID` | the 9 blocks; `to_cycles(id, rng)` for the fake launcher |
+| `fifo_rl/plan/stimulus_plan.py` | `PlannedAction`, `StimulusPlan` | one chosen block (`idx`, `action_id`, the state seen when chosen) and the ordered plan |
+| `fifo_rl/plan/state_encoder.py` | `StateEncoder` | (campaign store, plan so far) → 93 numbers |
+| `fifo_rl/plan/plan_builder.py` | `PlanBuilder` | asks the agent for blocks until `END_TEST` or the plan is full |
+| `fifo_rl/plan/plan_file.py` | `TextPlanWriter`, `read_plan` | plan ↔ text file |
+| `fifo_rl/launchers/` | `SimulatorLauncher`, `FakeLauncher`, `QuestaLauncher`, `RunOutput` | run one plan → result file + coverage report (+ wall-clock times) |
+| `fifo_rl/questa/result_parser.py` | `ResultParser`, `RunResult` | pass / errors from `result.txt`, or from the UVM summary in the log when there is no `result.txt` |
+| `fifo_rl/questa/report_parser.py` | (existing) `hits_vector` | the report → 64 bins of the test |
+| `fifo_rl/campaign/reward_attributor.py` | `RewardAttributor`, `AttributionResult` | rewards of the plan's blocks (step 1: test-level) |
+| `fifo_rl/campaign/campaign_store.py` | `CampaignStore`, `TestSummary` | the campaign's true coverage, tests left, history |
+| `fifo_rl/campaign/trajectory_builder.py` | `TrajectoryBuilder`, `Transition` | plan + rewards → one transition per block |
+| `fifo_rl/campaign/campaign_runner.py` | `CampaignRunner`, `RunConfig` | the loop: plan → write → launch → parse → reward → store → transitions → `agent.observe` / `learn` |
+| `scripts/run_campaign.py` | – | train / evaluate with the fake or the Questa launcher; one CSV row per test (cycles, wall time, new bins, …) |
+
+**What the testbench must provide for step 1** (verification team; `src codes/` is read-only for us): a test (default name `FIFO_rl_test`, chosen with `+UVM_TESTNAME`) that reads `+PLAN_FILE`, applies one reset cycle, then for each `ACT` line drives `cycles` transactions with those wr/rd/rst percentages, and stops at `END_TEST`; batch run with `coverage save` **without** `-du FIFO`. Optional `result.txt` (`passed= errors= cycles= actions=`); without it the UVM error summary in the log is used.
+
+**As built 2026-10-27 (not committed yet; 244 tests pass = 183 old + 61 new):**
+- `plan_max_len` default is **10**, not 8: the shortest plan reaching all 64 bins needs **9 blocks** — `WRITE, IDLE, READ, WRITE_READ, IDLE, WRITE, WRITE_READ, IDLE, RESET_TRAFFIC` (67 cycles; closes 64/64 in 97% of seeds, the rest is RESET_TRAFFIC luck). `cx_almostfull <0,1,1>` needs a READ that *starts from full* (8 → 7), which is why IDLE at 7 then READ is not enough.
+- **Fake-FIFO results** (eval on 200 unseen campaigns, budget 30 tests, seed + 2000):
+
+  | agent | closes | tests to close (median / mean) | cycles to close (median) |
+  |---|---|---|---|
+  | random block each step | 98.5% | 7 / 8.5 | 395 |
+  | DDQN `best.pt` (2000 campaigns, `--gamma 0.99 --lr 5e-4 --eps-decay-steps 80000 --buffer-capacity 50000`, ~8 min CPU) | 99.5% | 3 / 3.6 | 287 |
+  | best possible (the 9-block plan) | ~97% in 1 test | 1 | 67 |
+- **Step-1 learning is unstable:** greedy validation went 87% → 77% → **100% (campaign 1000, kept as best.pt)** → 80% → 47% → 0% → 0% as ε fell to 0.05; a first try (600 campaigns, lr 1e-3) peaked at 40%. Typical collapse: END_TEST at once every test, or full 10-block plans that never close. Cause: the reward arrives only on END_TEST, so the agent cannot tell which block helped (the credit problem step 2 removes). Always keep `best.pt` (picked on validation), never `last.pt`. Worth trying before step 2: more seeds, a lower lr, a slower ε decay.
+- The DDQN favours WRITE, READ, RAND50, RESET_TRAFFIC and BASELINE and never uses RESET, IDLE or WRITE_READ — so it does not find the 1-test plan; it closes in ~3 tests by mixing random blocks.
+- **Step 1 runs on real Questa (2026-10-27, Questa Sim-64 2024.1 on Windows, `C:\questasim64_2024.1\win64`, license `MGLS_LICENSE_FILE`).** Until the verification team delivers its plan test, `fifo_rl/tb_rl/` holds the AI team's **stand-in**: `FIFO_rl_pkg.sv` (`FIFO_plan_sequence` reads `+PLAN_FILE`, sets `WR_EN_ON_DIST` / `RD_EN_ON_DIST` per block and replaces the fixed 10% `reset_con` by the block's rst %; `FIFO_rl_test extends FIFO_test`: reset sequence, plan, `#1ns`, then writes `+RESULT_FILE` = `passed= errors= fatals= cycles= actions=`), `FIFO_rl_top.sv` (copy of `FIFO_top` that imports the new package), `rl_files.list` (the 14 unchanged `src codes/` files + those two). Nothing in `src codes/` is modified. Config: `questa_src_list: tb_rl/rl_files.list`, `questa_top: work.FIFO_rl_top`.
+- **Fake FIFO = Questa for the plan test, bin for bin:** `FIFO_RL_QUESTA=1 pytest -q tests/test_questa_real.py` (3 tests, ~30 s) runs 3 deterministic plans (WRITE+IDLE; 9 fixed blocks; empty test) and requires the same hit count on all 64 bins, the cycle count and pass. All pass → training on the fake FIFO is valid for the plan test.
+- **Real-Questa numbers (this laptop):** one test ≈ **6.2 s** wall (vsim ≈ 5.6–6.3 s, almost all start-up — 45 vs 93 cycles makes no difference; vcover report ≈ 0.3 s); first vsim after compiling ≈ 18–20 s (optimisation). 60 tests, all passed.
+
+  | on Questa (3 campaigns each, seed + 2000) | closes | tests to close | cycles per campaign | wall time per campaign |
+  |---|---|---|---|---|
+  | random block each step | 2 of 3 | 10 | 747 | ~117 s |
+  | DDQN `best.pt` (trained on the fake FIFO) | 3 of 3 | 3.3 | 309 | ~21 s |
+  | original `FIFO_test` (one CRV run, 10,200 cycles) | always | 1 | 10,200 | **6–7 s** |
+  The DDQN plans on Questa look like on the fake FIFO (e.g. test 1 = `WRITE RAND50 WRITE WRITE RAND50 …` → 55 bins, test 2 mixes `RESET_TRAFFIC` → 62, test 3 `BASELINE ×3` → 64). **RL beats random block choice ~5×, but one long CRV run is still ~3× cheaper** — start-up per test dominates and `cg_FIFO` closes in ~400 random cycles. The §9 risk stands; the honest wins are a richer coverage model or keeping one vsim alive across tests.
+- Run on Windows from `fifo_rl/`: Questa on PATH (or `--questa-bin C:/questasim64_2024.1/win64`), then `python -m scripts.run_campaign eval --agent dqn --checkpoint <best.pt> --launcher questa --eval-campaigns 3`; every test keeps `plan.txt`, `sim.log`, `result.txt`, `run.ucdb`, `coverage.txt` under `runs/questa/tests/<out name>/c<campaign>_t<test>/`.
+
+**Step 2 requests** (later): `action_idx` in `FIFO_seq_item`, an `action_idx` wire in `FIFO_if` (not in the DUT modport), driver + monitor copy it, and in `FIFO_coverage.sv` a package-level `covergroup cg_action(string name) with function sample(FIFO_seq_item t)` (same bins as `cg_FIFO`, `option.per_instance = 1`), one new instance `act_<idx>` per block, skipped for the reset cycle (`action_idx = -1`).
+
+## STATUS 2026-10-26 (older — 22-action design; still valid for the old env)
 - **The whole loop works on the fake FIFO:** fake FIFO → 64 bins → 87-number state → `DQNAgent` → one of 22 actions → reward → replay memory → learning. 183 tests pass on `FIFO_RL_dev` (everything below is merged there as of `63f51a7`).
 - **Who built what:**
   - Kenzy: `actions.py` (22 actions), `fake_fifo.py`, `backends/`, `reward.py`, `envs/coverage_env.py`.

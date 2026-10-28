@@ -1,0 +1,16 @@
+"../../src codes/FIFO.sv"
+"../../src codes/FIFO_SVA.sv"
+"../../src codes/FIFO_if.sv"
+"../../src codes/FIFO_seq_item.sv"
+"../../src codes/FIFO_sequencer.sv"
+"../../src codes/FIFO_config_obj.sv"
+"../../src codes/FIFO_monitor.sv"
+"../../src codes/FIFO_driver.sv"
+"../../src codes/FIFO_agent.sv"
+"../../src codes/FIFO_coverage.sv"
+"../../src codes/FIFO_scoreboard.sv"
+"../../src codes/FIFO_env.sv"
+"../../src codes/FIFO_sequence.sv"
+"../../src codes/FIFO_test.sv"
+FIFO_rl_pkg.sv
+FIFO_rl_top.sv

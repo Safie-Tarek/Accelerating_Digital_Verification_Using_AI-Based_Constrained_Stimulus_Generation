@@ -26,3 +26,22 @@ n_episodes: 3000
 eval_every: 100           # greedy evaluation every eval_every training episodes
 eval_episodes: 100
 seed: 0
+
+# plan-based campaign (fifo_rl/plan, fifo_rl/campaign, scripts/run_campaign.py)
+# one test = one simulation of a plan of blocks; one campaign = one DQN episode.
+# The reward arrives at the end of each plan: train with --gamma 0.99 (and a longer eps decay).
+campaign_budget: 30       # tests per campaign
+plan_max_len: 10          # blocks per plan before END_TEST is added (9 blocks can close 64/64)
+plan_history: 3           # last blocks one-hot in the state (64 + 3*9 + 2 = 93 numbers)
+cycle_cost: 0.0           # bins charged per simulated cycle (0: only the number of tests counts)
+n_campaigns: 3000         # training campaigns
+eval_campaigns: 50        # greedy campaigns per evaluation
+
+# real Questa (fifo_rl/launchers/questa_launcher.py)
+questa_bin: ""            # folder of vsim/vcover/vlib/vlog; "" = on PATH
+questa_tool_suffix: .exe  # .exe for Windows Questa (also from WSL), "" for Linux Questa
+questa_work_dir: runs/questa                      # compiled `work` library; test folders below it
+questa_src_list: tb_rl/rl_files.list              # "src codes/" files + the stand-in plan test (relative to fifo_rl/)
+questa_test: FIFO_rl_test # UVM test that reads +PLAN_FILE
+questa_top: work.FIFO_rl_top
+questa_timeout_s: 600
