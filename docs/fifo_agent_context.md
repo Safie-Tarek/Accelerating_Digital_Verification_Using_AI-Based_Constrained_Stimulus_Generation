@@ -1,8 +1,60 @@
 # FIFO RL Agent — Technical Context (team copy)
 
-> The AI team's shared working notes. It holds everything the DQN agent needs from the FIFO testbench in `src codes/` and `FIFO Plan.xlsx`. For a gentler, step-by-step explanation read [`fifo_walkthrough.md`](fifo_walkthrough.md); for who builds what, read [`fifo_team_plan.md`](fifo_team_plan.md). Last updated: 2026-10-27.
+> The AI team's shared working notes. It holds everything the DQN agent needs from the FIFO testbench in `src codes/` and `FIFO Plan.xlsx`. For a gentler, step-by-step explanation read [`fifo_walkthrough.md`](fifo_walkthrough.md); for who builds what, read [`fifo_team_plan.md`](fifo_team_plan.md). Last updated: 2026-11-01.
 
-## STATUS 2026-10-27 — plan-based campaign (newest — read this first)
+## STATUS 2026-11-01 — campaign results on real Questa (newest — read this first)
+
+**Result in one line.** Train on the fake FIFO, test on real Questa: the trained DDQN closes 64/64 in 30 of 30 Questa campaigns in about 2 tests, against about 9 for random block choice. One long constrained-random (CRV) run is still slightly faster in wall time (5.2 s against 5.9–7.7 s), so the honest win is tests and cycles, not time.
+
+**Setup.** Questa Sim-64 2024.1 on Windows with Windows Python 3.11 (`torch 2.11.0+cpu`), using the stand-in plan test in `fifo_rl/tb_rl/`. Budget 30 tests per campaign, `plan_max_len` 10, `--gamma 0.99 --eps-decay-steps 80000`. Before the runs, `FIFO_RL_QUESTA=1 pytest -q tests/test_questa_real.py` passed (fake FIFO = Questa, bin for bin). No Python or testbench code changed for these results.
+
+**Comparison on real Questa** (30 unseen campaigns each, `--seed 1`; every simulation passed, 0 UVM errors):
+
+| Agent | Trained on | Closed | Tests to close (mean / median) | Cycles per campaign | Wall time per campaign (mean) | Fake FIFO check (300 campaigns) |
+|---|---|---|---|---|---|---|
+| DDQN `long_same_seed1` (6000 campaigns, best at 1500) | fake | 30/30 | 1.53 / 1 | 270 | 5.9 s | 300/300, 1.74 tests |
+| DDQN `final_steady_seed4` (3000, best at 100) | fake | 30/30 | 1.90 / 2 | 238 | 7.7 s | 300/300, 2.10 tests |
+| DDQN `final_same_seed4` (3000, best at 3000) | fake | 30/30 | 2.10 / 1 | 292 | 7.7 s | **291/300**, 2.09 tests |
+| DDQN `final_steady_seed3` (3000, best at 100) | fake | 30/30 | 2.80 / 2 | 315 | 10.8 s | 300/300, 3.05 tests |
+| DDQN `final_same_seed3` (3000, best at 2800) | fake | 30/30 | 3.07 / 2 | 398 | 11.7 s | 300/300, 3.20 tests |
+| DDQN `train_ddqn_questa_seed0` (200 campaigns) | **Questa** | 30/30 | 18.90 / 19 | 1,961 | not comparable (the PC probably slept during this run) | – |
+| Random block each step | – | 30/30 | 9.27 / 8.5 | 457 | 37.4 s | 297/300, 8.66 tests |
+| Original `FIFO_test` (one CRV run, seeds 1–10) | – | 10/10 | 1 | 10,200 | **5.2 s** | – |
+
+- `vcover merge` of each campaign's UCDBs confirmed 64/64 in Questa itself for all 30 campaigns of `long_same_seed1` and of `final_steady_seed4`. The other rows use the Python bin tracking, which `vcover merge` matched on every campaign checked.
+- `long_same_seed1` is the best of 8 trained runs, so its numbers are slightly optimistic. `final_steady_seed4` is the best run of the latest 4 (validated on 100 campaigns).
+- A first run on 2026-10-31 (`train_ddqn_seed0`, 3000 campaigns, validated on 50) closed 34 of 35 Questa campaigns and 299/300 fake ones.
+- **The CRV row needs care.** `FIFO_test` runs 10,200 cycles, but closes by ~400–500, so "43× fewer cycles" overstates the agent. On wall time CRV still wins, because every test pays ~3.9 s of Questa start-up. The §9 risk stands; keeping one vsim alive across tests or a richer coverage model remain the honest ways forward.
+
+**Findings.**
+- **Train on the fake FIFO, test on Questa.** Fake-FIFO numbers predicted Questa well (tests to close 3.20 / 3.07, 2.09 / 2.10, 3.05 / 2.80, 2.10 / 1.90). A Questa test takes ~3.9 s and a fake one ~0.05 s, and a full 3000-campaign run on Questa would need ~55,000 tests ≈ 66 h. Questa training was therefore cut to 200 campaigns (`--eps-decay-steps 8000 --eval-every 50 --eval-campaigns 5`). It closed every campaign but used twice as many tests as random, mostly repeating `WRITE`. It had far fewer campaigns than the fake runs, so this is not a like-for-like test of the simulators.
+- **More training alone does not help.** With 6000 campaigns, validation closure per 1500-campaign window stayed flat or noisy: current settings 47/31/52/38% and 27/31/42/49%, steadier settings 57/58/43/67% and 61/58/68/65%. Validation still jumps between 0% and 100% late in training (last validations of the latest 4 runs: 56%, 100%, 22%, 4%).
+- **Steadier settings help on average, not reliably.** `--lr 1e-4 --buffer-capacity 100000 --target-sync 1000` averaged 64–65% validation closure, against 38–47% for the defaults (latest 4 runs). Neither gives a stable policy, and 2–4 seeds per setting is thin evidence.
+- **Checkpoint selection matters most.** Every `best.pt` closed ≥ 97% of 300 unseen campaigns, while `last.pt` often collapses. Two of the latest 4 best checkpoints came at campaign 100, with ε still ~0.93. Always validate on ≥ 100 campaigns and then run a fresh evaluation.
+- **Stuck policies still happen.** Greedy play has no exploration, so a repeating plan can use the whole budget (one campaign stopped at 51/64 repeating `WRITE`; `final_same_seed4` missed 9 of 300). 30 Questa campaigns can miss this, so check 300 fake campaigns as well.
+- **What the agent learned.** Mostly long `BASELINE` plans, mixed with `RAND50`, `WRITE` or `RESET_TRAFFIC`. It still does not find the 9-block directed plan (67 cycles, 1 test), so step 2's per-block reward is still worth doing.
+
+**Reproduce** (from `fifo_rl/`; `runs/` is git-ignored, so checkpoints are not on the branch and must be shared separately or retrained):
+```bash
+python -m scripts.run_campaign train --gamma 0.99 --eps-decay-steps 80000 --n-campaigns 3000 --eval-campaigns 100 \
+    --seed 4 --lr 1e-4 --buffer-capacity 100000 --target-sync 1000 --out runs/campaign/final_steady_seed4
+python -m scripts.run_campaign eval --agent dqn --checkpoint runs/campaign/final_steady_seed4/best.pt --eval-campaigns 300 \
+    --out runs/campaign/evalfake_final_steady_seed4
+python -m scripts.run_campaign eval --agent dqn --checkpoint runs/campaign/final_steady_seed4/best.pt --launcher questa \
+    --eval-campaigns 30 --seed 1 --out runs/campaign/evalq_final_steady_seed4
+```
+Use `--questa-work-dir <folder outside OneDrive>` for long Questa runs. Set a shorter `--eval-every` for Questa training, because checkpoints are saved only at validations and runs cannot resume. Training is ~1 hour per 3000 campaigns on CPU, and four runs side by side work fine with `OMP_NUM_THREADS=1`. Questa wall time per test nearly doubles while the CPU is shared (~7.7 s against ~3.9 s).
+
+**Resuming a trained agent (added 2026-11-02, 255 tests pass).** `train --resume <best.pt>` goes on training a saved DQN agent instead of a new one (`scripts/run_campaign.py`: `resume_agent`, `--resume`; `fifo_rl/config.py`: `explicit_keys`). Command and rules: `fifo_rl/README.md`.
+- **Kept from the checkpoint:** networks, optimizer, step counters and the learning settings (`RESUMABLE_KEYS`: `lr`, `gamma`, `batch_size`, `learning_starts`, `target_sync`, `grad_clip`, `buffer_capacity`, `eps_*`), unless given on the command line or in a `--config` file. `hidden` / `double` cannot change. A checkpoint of another size, such as the old 22-action design, is refused.
+- **Not kept:** the replay buffer, because checkpoints do not store it. It refills before learning starts again (`learning_starts`, 500 by default). Saving it would add 8–76 MB per checkpoint, so it was left out.
+- **ε** follows the restored step count, so it stays at `eps_end`. Use `--eps-start 0.1 --eps-end 0.1` for fixed exploration.
+- **Protection:** the loaded agent is validated before the first campaign (`eval.csv` campaign 0), and `best.pt` changes only if a later validation scores higher. Writing into the checkpoint's own folder is refused.
+- **First try:** `long_same_seed1/best.pt` resumed with `--seed 10`, ε 0.1, 100 campaigns, validated on 100 campaigns. The loaded agent closed 100% in 1.81 tests, and after 50 and 100 more campaigns it got worse (2.42, then 5.14 tests), so `best.pt` kept the loaded agent. This matches the earlier finding that more training alone does not help. A real test would use 2–3 seeds × ~1000 campaigns, comparing each new `best.pt` with the original on the same 300 fake campaigns.
+
+**Next:** step 2 (per-block reward) is the main fix for instability. Before that, the team should decide on the §9 risk, because CRV still wins on wall time with `cg_FIFO`.
+
+## STATUS 2026-10-27 — plan-based campaign design (older; results superseded by 2026-11-01 above)
 
 **Why a new design.** With the 22 actions, every action is one Questa run (~3 s start-up), so 5 agent runs (~15 s) lose to one constrained-random run (~3 s). New design: **one Questa run = one test plan made of several action blocks**, run back to back **without a reset between blocks** (the FIFO keeps its fill level). The old 22-action env (`actions.py`, `state.py`, `envs/`, `backends/`, `scripts/train.py`) is kept unchanged for comparison; the new code lives in new packages. **The DQN agent is not changed** (`DQNAgent`, `QNetwork`, replay buffer, schedules): it only sees new sizes (93 → 9).
 
