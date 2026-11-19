@@ -51,6 +51,16 @@ Use `--questa-work-dir <folder outside OneDrive>` for long Questa runs. Set a sh
 - **ε** follows the restored step count, so it stays at `eps_end`. Use `--eps-start 0.1 --eps-end 0.1` for fixed exploration.
 - **Protection:** the loaded agent is validated before the first campaign (`eval.csv` campaign 0), and `best.pt` changes only if a later validation scores higher. Writing into the checkpoint's own folder is refused.
 - **First try:** `long_same_seed1/best.pt` resumed with `--seed 10`, ε 0.1, 100 campaigns, validated on 100 campaigns. The loaded agent closed 100% in 1.81 tests, and after 50 and 100 more campaigns it got worse (2.42, then 5.14 tests), so `best.pt` kept the loaded agent. This matches the earlier finding that more training alone does not help. A real test would use 2–3 seeds × ~1000 campaigns, comparing each new `best.pt` with the original on the same 300 fake campaigns.
+- **Real test (2026-11-16): resume does not improve the agent.** `long_same_seed1/best.pt` resumed with `--seed 10/11/12 --eps-start 0.1 --eps-end 0.1 --n-campaigns 1000 --eval-campaigns 100` (three runs side by side, `OMP_NUM_THREADS=1`, ~25 min; `runs/campaign/resume1k_seed*`). No later validation beat the loaded agent, so all three `best.pt` are the loaded agent (campaign 0: 100% closure in 1.81 / 1.60 / 1.69 tests). Validation fell apart during training: best later points were 98% in 1.72 tests (seed 11, campaign 200) and 99% in 2.10 (seed 10, campaign 400), but every run hit 0–16% closure several times, and all three ended there (campaign 1000: 16%, 0%, 0%).
+
+  | Checkpoint | Evaluated on | Closed | Tests to close (mean) | Cycles per campaign |
+  |---|---|---|---|---|
+  | resumed `best.pt` (= loaded agent) | fake, 300 campaigns `--seed 0` | 300/300 | 1.74 | 308 |
+  | resumed `last.pt`, seeds 10 / 11 / 12 | fake, 300 campaigns `--seed 0` | 47 / 0 / 0 of 300 | 2.51 / – / – | 1,073 / 1,295 / 3,030 |
+  | resumed `best.pt` (= loaded agent) | **Questa**, 30 campaigns `--seed 1`, 46 tests all passed | 30/30 | 1.53 | 270 |
+
+  These numbers equal the original `long_same_seed1` rows (fake 1.74, Questa 1.53), which is expected because the weights are the same. Questa wall time was 8.0 s per test, against 3.8 s before, because fake evaluations shared the CPU. Conclusion: with a test-level reward, more training from a good checkpoint drifts away from it. Keep `long_same_seed1/best.pt`, and do step 2 (per-block reward) before trying more training.
+- **Fine-tuning rounds (2026-11-17):** 3 more rounds (gentle fine-tuning, more exploration, fresh seeds; 9 runs) also found nothing better. Details and the checkpoint-selection issue: [`fifo_rl_finetune_results.md`](fifo_rl_finetune_results.md).
 
 **Next:** step 2 (per-block reward) is the main fix for instability. Before that, the team should decide on the §9 risk, because CRV still wins on wall time with `cg_FIFO`.
 

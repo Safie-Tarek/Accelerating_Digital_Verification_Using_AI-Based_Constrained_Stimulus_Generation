@@ -290,7 +290,7 @@ def eval_agent(kind, checkpoint, cfg):
         return GreedyWrapper(StubAgent(n_actions=N_ACTIONS, seed=cfg["seed"]))
     if checkpoint is None:
         raise SystemExit("eval --agent dqn needs --checkpoint <best.pt>")
-    from fifo_rl.agents.dqn import DQNAgent
+    
     return GreedyWrapper(DQNAgent.load(checkpoint))
 
 
