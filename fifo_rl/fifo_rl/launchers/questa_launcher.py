@@ -8,6 +8,8 @@ Per test, from work_dir (where the `work` library is), with paths relative to it
     vsim -c -sv_seed <seed> <top> -coverage -l <run>/sim.log +UVM_TESTNAME=<test> +PLAN_FILE=<run>/plan.txt
          +RESULT_FILE=<run>/result.txt -do "coverage save -onexit <run>/run.ucdb; run -all; quit -f"
     vcover report -cvg -details -nocompactcrossbins <run>/run.ucdb      -> <run>/coverage.txt
+With per_action=True (step 2) vsim also gets +ACTION_COV=1: the test then adds one cg_action instance
+per block (act_<idx>, tb_rl/FIFO_rl_pkg.sv), printed as "Covergroup instance act_<idx>" in the report.
 Coverage is saved WITHOUT -du FIFO (that option drops cg_FIFO). Relative paths are used because
 Windows tools called from WSL translate the working directory but not path arguments; the one
 absolute path (the source list for vlog) goes through `wslpath -w` when needed.
@@ -39,7 +41,7 @@ class QuestaLauncher(SimulatorLauncher):
     name = "questa"
 
     def __init__(self, work_dir, src_list, test_name="FIFO_rl_test", top="work.FIFO_top", questa_bin="",
-                 tool_suffix=".exe", timeout_s=600, convert_paths=None, run_command=subprocess.run):
+                 tool_suffix=".exe", timeout_s=600, convert_paths=None, run_command=subprocess.run, per_action=False):
         """Input:  work_dir, folder holding the compiled `work` library (test folders go below it);
                 src_list, path of "src codes/src_files.list";
                 test_name, the UVM test that reads +PLAN_FILE; top, the top module;
@@ -47,7 +49,8 @@ class QuestaLauncher(SimulatorLauncher):
                 tool_suffix, ".exe" for Windows Questa (also from WSL), "" for Linux Questa;
                 timeout_s, seconds before one simulation is killed;
                 convert_paths, pass absolute paths through `wslpath -w` (None = only in WSL with .exe tools);
-                run_command, subprocess.run or a stand-in with the same interface (tests).
+                run_command, subprocess.run or a stand-in with the same interface (tests);
+                per_action, ask the test for the act_<idx> instances (+ACTION_COV=1, step 2).
         Output: nothing.
         """
         self.work_dir = Path(work_dir).resolve()
@@ -59,6 +62,7 @@ class QuestaLauncher(SimulatorLauncher):
         self.timeout_s = timeout_s
         self.convert_paths = (running_in_wsl() and tool_suffix == ".exe") if convert_paths is None else convert_paths
         self.run_command = run_command
+        self.per_action = per_action
 
     def tool(self, name):
         """Input: "vsim", "vcover", "vlib" or "vlog". Output: the command to call."""
@@ -121,7 +125,8 @@ class QuestaLauncher(SimulatorLauncher):
         start = time.perf_counter()
         self._run([self.tool("vsim"), "-c", "-sv_seed", str(seed), self.top, "-coverage", "-l", self.relative(log),
                    f"+UVM_TESTNAME={self.test_name}", f"+PLAN_FILE={self.relative(plan_file)}",
-                   f"+RESULT_FILE={self.relative(result)}", "-do", f"coverage save -onexit {self.relative(ucdb)}; run -all; quit -f"], "vsim", log)
+                   f"+RESULT_FILE={self.relative(result)}"] + (["+ACTION_COV=1"] if self.per_action else [])
+                  + ["-do", f"coverage save -onexit {self.relative(ucdb)}; run -all; quit -f"], "vsim", log)
         sim_time = time.perf_counter() - start
         if not ucdb.is_file():
             raise SimulationError(f"vsim saved no coverage database {ucdb}; see {log}")

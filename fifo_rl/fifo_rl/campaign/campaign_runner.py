@@ -10,6 +10,8 @@ One test (run_one_test):
     3. the launcher simulates it (fake FIFO or Questa)                -> RunOutput
     4. ResultParser: did it pass?   report_parser: which bins?        -> RunResult, bool[64]
     5. RewardAttributor: one reward per planned action                -> AttributionResult
+       (reward_mode "test" = step 1: the test's coverage reward on END_TEST; "action" = step 2:
+       every block gets the bins it was first to hit, from the report's act_<idx> instances)
     6. CampaignStore.commit: the campaign's coverage grows
     7. TrajectoryBuilder: one transition per planned action (next state of END_TEST = the first
        state of the next test, encoded after step 6)
@@ -23,14 +25,14 @@ from pathlib import Path
 import numpy as np
 
 from fifo_rl.campaign.campaign_store import CampaignStore, TestSummary
-from fifo_rl.campaign.reward_attributor import RewardAttributor
+from fifo_rl.campaign.reward_attributor import ActionRewardAttributor, RewardAttributor
 from fifo_rl.campaign.trajectory_builder import TrajectoryBuilder
 from fifo_rl.launchers.base import SimulationError
 from fifo_rl.plan.actions import N_ACTIONS
 from fifo_rl.plan.plan_builder import PlanBuilder
 from fifo_rl.plan.plan_file import TextPlanWriter
 from fifo_rl.plan.state_encoder import StateEncoder
-from fifo_rl.questa.report_parser import hits_vector
+from fifo_rl.questa.report_parser import hits_per_action, hits_vector
 from fifo_rl.questa.result_parser import ResultParser
 from fifo_rl.reward import RewardConfig
 
@@ -45,6 +47,7 @@ class RunConfig:
     run_root: Path = field(default=Path("runs/campaign/sims"))
     keep_runs: bool = False            # True: one folder per test; False: one folder reused
     stop_on_failure: bool = True       # a failed test (UVM error, assertion) stops the campaign
+    reward_mode: str = "test"          # "test" (step 1) or "action" (step 2, needs act_<idx> in the report)
 
     @classmethod
     def from_cfg(cls, cfg, **overrides):
@@ -52,7 +55,8 @@ class RunConfig:
         Output: a RunConfig.
         """
         values = dict(campaign_budget=cfg["campaign_budget"], plan_max_len=cfg["plan_max_len"],
-                      n_history=cfg["plan_history"], cycle_cost=cfg["cycle_cost"], base_seed=cfg["seed"])
+                      n_history=cfg["plan_history"], cycle_cost=cfg["cycle_cost"], base_seed=cfg["seed"],
+                      reward_mode=cfg.get("reward_mode", "test"))
         values.update(overrides)
         return cls(**values)
 
@@ -104,7 +108,10 @@ class CampaignRunner:
         self.planner = PlanBuilder(self.encoder, config.plan_max_len)
         self.writer = TextPlanWriter()
         self.result_parser = result_parser or ResultParser()
-        self.attributor = RewardAttributor(reward, config.cycle_cost)
+        attributors = {"test": RewardAttributor, "action": ActionRewardAttributor}
+        if config.reward_mode not in attributors:
+            raise ValueError(f"reward_mode must be 'test' or 'action', got {config.reward_mode!r}")
+        self.attributor = attributors[config.reward_mode](reward, config.cycle_cost)
         self.traj_builder = TrajectoryBuilder()
         self.store = CampaignStore(config.campaign_budget)
         self.campaign = -1
@@ -151,9 +158,11 @@ class CampaignRunner:
         if result.cycles is not None and result.cycles != plan.sim_cycles():
             raise SimulationError(f"the simulator ran {result.cycles} cycles, the plan has {plan.sim_cycles()}; "
                                   f"the plan file was not applied as written ({plan_file})")
-        test_hits = hits_vector(Path(output.coverage_report).read_text())
+        report_text = Path(output.coverage_report).read_text()
+        test_hits = hits_vector(report_text)
+        action_hits = hits_per_action(report_text, plan.n_blocks) if self.config.reward_mode == "action" else None
 
-        attribution = self.attributor.attribute(plan, test_hits, self.store.covered)
+        attribution = self.attributor.attribute(plan, test_hits, self.store.covered, action_hits)
         total_bins = self.store.commit(test_hits)
         done = self.store.done()
         next_state = self.encoder.encode(self.store)

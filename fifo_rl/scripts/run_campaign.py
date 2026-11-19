@@ -35,14 +35,14 @@ from fifo_rl.config import add_config_args, config_from_args, save_config
 from fifo_rl.evaluation import GreedyWrapper
 from fifo_rl.launchers.fake_launcher import FakeLauncher
 from fifo_rl.launchers.questa_launcher import QuestaLauncher
-from fifo_rl.plan.actions import ACTIONS, N_ACTIONS
+from fifo_rl.plan.actions import ACTION_INDEX, ACTIONS, N_ACTIONS
 from scripts.train import make_agent
 
 VALIDATION_SEED_OFFSET = 1000
 EVAL_SEED_OFFSET = 2000
-TEST_FIELDS = ("phase", "agent", "campaign", "test", "seed", "n_blocks", "actions", "forced_end", "cycles",
-               "new_bins", "total_bins", "reward", "passed", "sim_time", "report_time", "wall_time",
-               "epsilon", "loss")
+TEST_FIELDS = ("phase", "agent", "reward_mode", "campaign", "test", "seed", "n_blocks", "actions", "forced_end",
+               "cycles", "new_bins", "block_new_bins", "total_bins", "reward", "passed", "sim_time", "report_time",
+               "wall_time", "epsilon", "loss")
 EVAL_FIELDS = ("campaign", "step", "epsilon", "closure_rate", "tests_used_mean", "tests_to_close_mean",
                "cycles_per_campaign_mean", "return_mean", "best")
 
@@ -50,8 +50,9 @@ EVAL_FIELDS = ("campaign", "step", "epsilon", "closure_rate", "tests_used_mean",
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("mode", choices=("train", "eval"))
-    parser.add_argument("--agent", choices=("dqn", "random", "stub"), default="dqn",
-                        help="dqn = DQNAgent (cfg 'double' picks DQN or DDQN); random = baseline; stub = no learning")
+    parser.add_argument("--agent", choices=("dqn", "random", "baseline", "stub"), default="dqn",
+                        help="dqn = DQNAgent (cfg 'double' picks DQN or DDQN); random = random block each step; "
+                             "baseline = always BASELINE (constrained random 70/30/10, full plans); stub = no learning")
     parser.add_argument("--checkpoint", type=Path, default=None, help="eval --agent dqn: a best.pt / last.pt")
     parser.add_argument("--launcher", choices=("fake", "questa"), default="fake")
     parser.add_argument("--out", type=Path, default=None, help="default runs/campaign/<mode>_<agent>_seed<seed>")
@@ -62,10 +63,11 @@ def parse_args(argv=None):
 def make_launcher(kind, cfg):
     """Input: "fake" or "questa", config. Output: the launcher (Questa: compiled once here)."""
     if kind == "fake":
-        return FakeLauncher()
+        return FakeLauncher(per_action=cfg["reward_mode"] == "action")
     launcher = QuestaLauncher(cfg["questa_work_dir"], cfg["questa_src_list"], test_name=cfg["questa_test"],
                               top=cfg["questa_top"], questa_bin=cfg["questa_bin"] or "",
-                              tool_suffix=cfg["questa_tool_suffix"] or "", timeout_s=cfg["questa_timeout_s"])
+                              tool_suffix=cfg["questa_tool_suffix"] or "", timeout_s=cfg["questa_timeout_s"],
+                              per_action=cfg["reward_mode"] == "action")
     launcher.compile()
     return launcher
 
@@ -87,11 +89,14 @@ def make_runner(cfg, launcher, name, seed_offset):
 def row_for_test(phase, agent_name, summary, epsilon=None, losses=()):
     """Input: phase name, agent name, a TestSummary, epsilon, the test's learn() losses. Output: a CSV row."""
     plan, out = summary.plan, summary.output
-    return {"phase": phase, "agent": agent_name, "campaign": summary.campaign, "test": summary.test_no,
+    return {"phase": phase, "agent": agent_name, "reward_mode": summary.attribution.mode,
+            "campaign": summary.campaign, "test": summary.test_no,
             "seed": summary.seed, "n_blocks": plan.n_blocks,
             "actions": " ".join(pa.spec.name for pa in plan.actions),
             "forced_end": int(plan.actions[-1].forced), "cycles": plan.sim_cycles(),
-            "new_bins": summary.attribution.new_bins, "total_bins": summary.total_bins,
+            "new_bins": summary.attribution.new_bins,
+            "block_new_bins": " ".join(str(n) for n in summary.attribution.block_new_bins),
+            "total_bins": summary.total_bins,
             "reward": round(sum(summary.attribution.rewards), 6), "passed": int(summary.result.passed),
             "sim_time": round(out.sim_time, 4), "report_time": round(out.report_time, 4),
             "wall_time": round(out.wall_time, 4), "epsilon": "" if epsilon is None else round(epsilon, 4),
@@ -172,7 +177,8 @@ def train(cfg, out, agent_cls, launcher_kind="fake", verbose=True):
                     best, best_summary = score(summary), summary
                     agent.save(out / "best.pt")
                     (out / "summary.json").write_text(json.dumps(
-                        {"agent": agent.name, "seed": cfg["seed"], "campaign": campaign + 1, **summary}, indent=1))
+                        {"agent": agent.name, "reward_mode": cfg["reward_mode"], "seed": cfg["seed"],
+                         "campaign": campaign + 1, **summary}, indent=1))
                 agent.save(out / "last.pt")
                 row = {"campaign": campaign + 1, "step": agent.steps, "epsilon": round(agent.epsilon, 4),
                        "closure_rate": summary["closure_rate"],
@@ -205,21 +211,44 @@ def evaluate(cfg, out, agent, launcher_kind="fake"):
         writer = csv.DictWriter(f_tests, fieldnames=TEST_FIELDS)
         writer.writeheader()
         summary = summarize(play(runner, agent, cfg["eval_campaigns"], writer, "eval", agent.name))
-    summary = {"agent": agent.name, "launcher": launcher_kind, "seed": cfg["seed"], **summary}
+    summary = {"agent": agent.name, "launcher": launcher_kind, "reward_mode": cfg["reward_mode"], "seed": cfg["seed"],
+               **summary}
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     return summary
+
+
+class BaselineAgent:
+    """Constrained-random baseline: always BASELINE (70/30/10, the FIFO_test knobs); never ends a plan
+    itself, so every test is a full plan (plan_max_len blocks, END_TEST forced)."""
+    name = "baseline"
+
+    def act(self, state):
+        return ACTION_INDEX["BASELINE"]
 
 
 def eval_agent(kind, checkpoint, cfg):
     """Input: agent kind, checkpoint path, config. Output: an agent that plays without learning."""
     if kind == "random":
         return RandomAgent(n_actions=N_ACTIONS, seed=cfg["seed"])
+    if kind == "baseline":
+        return BaselineAgent()
     if kind == "stub":
         return GreedyWrapper(StubAgent(n_actions=N_ACTIONS, seed=cfg["seed"]))
     if checkpoint is None:
         raise SystemExit("eval --agent dqn needs --checkpoint <best.pt>")
     from fifo_rl.agents.dqn import DQNAgent
     return GreedyWrapper(DQNAgent.load(checkpoint))
+
+
+def mode_tag(cfg):
+    """Input: config. Output: "" for step 1, "_action" for step 2 (kept in folder names)."""
+    return "_action" if cfg["reward_mode"] == "action" else ""
+
+
+def refuse_overwrite(out):
+    """Input: an output folder. Output: nothing; stops if it already holds results (never overwrite a run)."""
+    if (Path(out) / "summary.json").exists():
+        raise SystemExit(f"{out} already holds results: pick another --out (results are never overwritten)")
 
 
 def main(argv=None):
@@ -233,14 +262,16 @@ def main(argv=None):
         else:
             from fifo_rl.agents.dqn import DQNAgent
             cls, name = DQNAgent, ("ddqn" if cfg["double"] else "dqn")
-        out = args.out or Path("runs/campaign") / f"train_{name}_seed{cfg['seed']}"
+        out = args.out or Path("runs/campaign") / f"train_{name}{mode_tag(cfg)}_seed{cfg['seed']}"
+        refuse_overwrite(out)
         result = train(cfg, out, cls, args.launcher)
         best = result["best"]
         print(f"\nbest: closes {100 * best['closure_rate']:.0f}%, tests used {best['tests_used']['mean']:.2f}"
               f" (budget {cfg['campaign_budget']}), {result['steps']} agent steps; written to {out}/")
     else:
         agent = eval_agent(args.agent, args.checkpoint, cfg)
-        out = args.out or Path("runs/campaign") / f"eval_{agent.name}_{args.launcher}_seed{cfg['seed']}"
+        out = args.out or Path("runs/campaign") / f"eval_{agent.name}{mode_tag(cfg)}_{args.launcher}_seed{cfg['seed']}"
+        refuse_overwrite(out)
         s = evaluate(cfg, out, agent, args.launcher)
         to_close = f"{s['tests_to_close']['mean']:.2f}" if s["tests_to_close"] else "-"
         print(f"{agent.name} on {args.launcher}: closes {100 * s['closure_rate']:.0f}% of {s['campaigns']} campaigns, "

@@ -150,6 +150,19 @@ def test_questa_commands_and_outputs(tmp_path):
     assert ResultParser().parse(out.result_file, out.log_file).passed
 
 
+def test_questa_per_action_asks_for_act_instances(tmp_path):
+    runner = FakeQuesta()
+    launcher = make_launcher(tmp_path, runner, per_action=True)
+    run_dir = launcher.work_dir / "tests" / "t0"
+    _, plan_file = write_plan(run_dir / "plan.txt", "WRITE")
+    launcher.launch(plan_file, seed=1, run_dir=run_dir)
+    vsim = runner.calls[0][0]
+    assert "+ACTION_COV=1" in vsim and vsim.index("+ACTION_COV=1") < vsim.index("-do")
+    step1 = FakeQuesta()
+    make_launcher(tmp_path, step1).launch(plan_file, seed=1, run_dir=run_dir)
+    assert "+ACTION_COV=1" not in step1.calls[0][0]               # step 1 command unchanged
+
+
 def test_questa_tool_folder_and_linux_suffix(tmp_path):
     launcher = make_launcher(tmp_path, FakeQuesta(), questa_bin="/opt/questa/bin", tool_suffix="")
     assert Path(launcher.tool("vsim")) == Path("/opt/questa/bin/vsim")

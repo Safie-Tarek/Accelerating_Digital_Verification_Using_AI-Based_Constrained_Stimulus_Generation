@@ -57,3 +57,33 @@ def test_questa_matches_fake_fifo_bin_for_bin(launcher, name):
     questa = parse_bin_hits(out.coverage_report.read_text())
     fake = fake_fifo.bin_hit_counts(fake_fifo.simulate(plan_cycles(plan.action_ids())))
     assert {n: questa[n] for n in BIN_NAMES} == {n: int(c) for n, c in zip(BIN_NAMES, fake)}
+
+
+@pytest.fixture(scope="module")
+def action_launcher(launcher):
+    return QuestaLauncher(launcher.work_dir, TB_LIST, top="work.FIFO_rl_top",
+                          questa_bin=os.environ.get("FIFO_RL_QUESTA_BIN", ""), per_action=True)
+
+
+def test_questa_act_instances_match_the_fake_fifo_block_by_block(action_launcher, tmp_path):
+    """Step 2: +ACTION_COV=1 gives one act_<idx> instance per block; for a plan with no randomness
+    every block's 64 hit counts must equal the fake FIFO's (same report format, same parser)."""
+    from fifo_rl.launchers.fake_launcher import FakeLauncher
+    from fifo_rl.questa.report_parser import _parse_lines, _sections, hits_per_action
+
+    plan = StimulusPlan(plan_id=0, seed=1, max_len=10)
+    for block in PLANS["nine_fixed_blocks"]:
+        plan.add(ACTION_INDEX[block], np.zeros(1))
+    plan.add(END_TEST_ID, np.zeros(1))
+    run_dir = action_launcher.work_dir / "tests" / "act_nine_fixed_blocks"
+    plan_file = TextPlanWriter().write(plan, run_dir / "plan.txt")
+    out = action_launcher.launch(plan_file, seed=1, run_dir=run_dir)
+    assert ResultParser().parse(out.result_file, out.log_file).passed
+
+    def per_block(text):
+        return {inst.rsplit("/", 1)[-1]: _parse_lines(lines) for (cg, inst), lines in _sections(text).items() if inst}
+
+    questa_text = out.coverage_report.read_text()
+    fake_text = FakeLauncher(per_action=True).launch(plan_file, 1, tmp_path).coverage_report.read_text()
+    assert per_block(questa_text) == per_block(fake_text)
+    assert hits_per_action(questa_text, plan.n_blocks).shape == (9, 64)
