@@ -88,6 +88,19 @@ python -m scripts.run_campaign eval --agent dqn --checkpoint runs/campaign/train
 python -m scripts.run_campaign eval --agent dqn --checkpoint <best.pt> --launcher questa --eval-campaigns 3
 ```
 
+**Go on training a saved agent** instead of starting from a new one:
+
+```bash
+python -m scripts.run_campaign train --resume runs/campaign/long_same_seed1/best.pt --seed 10 \
+    --eps-start 0.1 --eps-end 0.1 --n-campaigns 1000 --eval-campaigns 100 --out runs/campaign/resume_seed10
+```
+
+- The networks, optimizer and step counters come from the checkpoint. The learning settings (`lr`, `gamma`, `target_sync`, `buffer_capacity`, `eps_*`, …) also stay as saved, unless you give them on the command line. `hidden` and `double` cannot change.
+- The replay buffer starts empty, because checkpoints do not store it. The agent does not learn until it holds `learning_starts` transitions.
+- ε follows the agent's own step count, so a finished schedule stays at `eps_end`. Give the same `--eps-start` and `--eps-end` for a fixed amount of exploration.
+- The loaded agent is validated first (campaign 0 in `eval.csv`), so `best.pt` is only replaced by an agent that scores higher. `summary.json` records `resumed_from` and `resumed_at_step`.
+- Use a new `--seed`, because campaign numbers start at 0 again. Validation scores from different seeds are not comparable, so compare checkpoints with `eval` on the same `--seed`.
+
 `--launcher questa` compiles `tb_rl/rl_files.list` once into `questa_work_dir`: the unchanged `../src codes/` files plus
 the AI team's stand-in plan test (`tb_rl/FIFO_rl_pkg.sv`: `FIFO_plan_sequence`, `FIFO_rl_test`; `tb_rl/FIFO_rl_top.sv`),
 until the verification team delivers its own. Tool folder, suffix and paths are the `questa_*` keys in

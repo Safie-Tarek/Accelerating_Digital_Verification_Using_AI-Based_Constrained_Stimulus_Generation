@@ -53,9 +53,23 @@ def parse_value(text):
 
 def config_from_args(args):
     """Input: parsed args from a parser set up by add_config_args. Output: the config dict."""
-    overrides = {name[len("cfg_"):]: value for name, value in vars(args).items()
-                 if name.startswith("cfg_") and value is not None}
-    return load_config(args.config, overrides)
+    return load_config(args.config, _overrides(args))
+
+
+def explicit_keys(args):
+    """Input: parsed args from a parser set up by add_config_args.
+    Output: the set of keys the user chose (on the command line or in a --config file), i.e. the
+            keys that did not just come from the defaults.
+    """
+    keys = set(_overrides(args))
+    if Path(args.config).resolve() != DEFAULT_CONFIG:
+        keys |= set(_read(args.config))
+    return keys
+
+
+def _overrides(args):
+    return {name[len("cfg_"):]: value for name, value in vars(args).items()
+            if name.startswith("cfg_") and value is not None}
 
 
 def save_config(cfg, path):

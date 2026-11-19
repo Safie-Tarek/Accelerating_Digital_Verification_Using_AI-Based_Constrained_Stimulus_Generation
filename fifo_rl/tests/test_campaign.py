@@ -228,3 +228,113 @@ def test_script_eval_dqn_needs_a_checkpoint(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit):
         run_campaign.main(["eval", "--agent", "dqn", "--out", str(tmp_path / "ev")])
+
+
+# ---------- train --resume ----------
+
+def pretrained(tmp_path, **kw):
+    """Train a small DQN into tmp_path/pre; return the path of its best.pt."""
+    from fifo_rl.agents.dqn import DQNAgent
+    cfg = small_cfg(learning_starts=10, batch_size=8, **kw)
+    run_campaign.train(cfg, tmp_path / "pre", DQNAgent, verbose=False)
+    return tmp_path / "pre" / "best.pt"
+
+
+def resume_cfg(**kw):
+    return small_cfg(learning_starts=10, batch_size=8, seed=7, **kw)
+
+
+def test_resume_goes_on_training_the_saved_agent(tmp_path, monkeypatch):
+    from fifo_rl.agents.dqn import DQNAgent
+    monkeypatch.chdir(tmp_path)
+    ckpt = pretrained(tmp_path)
+    steps_before = DQNAgent.load(ckpt).steps
+    run_campaign.train(resume_cfg(), tmp_path / "res", DQNAgent, verbose=False, resume=ckpt)
+    evals = rows(tmp_path / "res" / "eval.csv")
+    assert [r["campaign"] for r in evals] == ["0", "2", "4"]  # validated before training, then as usual
+    assert int(evals[0]["step"]) == steps_before
+    assert DQNAgent.load(tmp_path / "res" / "last.pt").steps > steps_before
+    summary = json.loads((tmp_path / "res" / "summary.json").read_text())
+    assert summary["resumed_from"] == str(ckpt) and summary["resumed_at_step"] == steps_before
+
+
+def test_resume_keeps_the_saved_settings_unless_given(tmp_path, monkeypatch):
+    import yaml
+    monkeypatch.chdir(tmp_path)
+    ckpt = pretrained(tmp_path, lr=5e-4, gamma=0.8, buffer_capacity=64)
+    agent = run_campaign.resume_agent(ckpt, resume_cfg(), 93, 9)  # defaults lr 1e-3, gamma 0.9: not given
+    assert agent.cfg["lr"] == 5e-4 and agent.cfg["gamma"] == 0.8 and agent.buffer.capacity == 64
+    assert agent.optimizer.param_groups[0]["lr"] == 5e-4
+    agent = run_campaign.resume_agent(ckpt, resume_cfg(lr=1e-5), 93, 9, explicit={"lr"})
+    assert agent.cfg["lr"] == 1e-5 and agent.optimizer.param_groups[0]["lr"] == 1e-5
+    assert agent.cfg["gamma"] == 0.8
+    assert len(agent.buffer) == 0 and agent.epsilon_schedule is not None
+    from fifo_rl.agents.dqn import DQNAgent
+    run_campaign.train(resume_cfg(), tmp_path / "res", DQNAgent, verbose=False, resume=ckpt)
+    saved = yaml.safe_load((tmp_path / "res" / "config.yaml").read_text())
+    assert saved["lr"] == 5e-4 and saved["gamma"] == 0.8  # config.yaml shows what was used
+
+
+def test_resume_with_a_fixed_epsilon(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ckpt = pretrained(tmp_path)
+    agent = run_campaign.resume_agent(ckpt, resume_cfg(eps_start=0.1, eps_end=0.1), 93, 9,
+                                      explicit={"eps_start", "eps_end"})
+    assert agent.epsilon == pytest.approx(0.1)
+
+
+def test_resume_rejects_a_checkpoint_of_another_size(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ckpt = pretrained(tmp_path)
+    with pytest.raises(SystemExit, match="87"):
+        run_campaign.resume_agent(ckpt, resume_cfg(), 87, 22)  # the old 22-action design
+
+
+def test_resume_cannot_change_the_network_shape(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ckpt = pretrained(tmp_path)
+    with pytest.raises(SystemExit, match="hidden"):
+        run_campaign.resume_agent(ckpt, resume_cfg(hidden=[64]), 93, 9, explicit={"hidden"})
+    run_campaign.resume_agent(ckpt, resume_cfg(), 93, 9, explicit={"hidden"})  # same shape given: fine
+
+
+def test_resume_keeps_the_loaded_agent_when_nothing_beats_it(tmp_path, monkeypatch):
+    import torch
+    from fifo_rl.agents.dqn import DQNAgent
+    monkeypatch.chdir(tmp_path)
+    ckpt = pretrained(tmp_path)
+    scores = iter(range(0, -100, -1))  # every validation scores lower than the one before
+    monkeypatch.setattr(run_campaign, "score", lambda summary: (next(scores),))
+    run_campaign.train(resume_cfg(), tmp_path / "res", DQNAgent, verbose=False, resume=ckpt)
+    assert [r["best"] for r in rows(tmp_path / "res" / "eval.csv")] == ["1", "0", "0"]
+    loaded, kept = DQNAgent.load(ckpt), DQNAgent.load(tmp_path / "res" / "best.pt")
+    assert kept.steps == loaded.steps
+    for key, value in loaded.online.state_dict().items():
+        assert torch.equal(kept.online.state_dict()[key], value)
+
+
+def test_resume_refuses_to_write_into_the_checkpoint_folder(tmp_path, monkeypatch):
+    from fifo_rl.agents.dqn import DQNAgent
+    monkeypatch.chdir(tmp_path)
+    ckpt = pretrained(tmp_path)
+    with pytest.raises(SystemExit, match="choose a new folder"):
+        run_campaign.train(resume_cfg(), ckpt.parent, DQNAgent, verbose=False, resume=ckpt)
+
+
+@pytest.mark.parametrize("argv", [["train", "--agent", "stub"], ["eval", "--agent", "dqn", "--checkpoint", "x.pt"]])
+def test_resume_needs_train_with_the_dqn(tmp_path, monkeypatch, argv):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit, match="--resume"):
+        run_campaign.main(argv + ["--resume", "x.pt", "--out", str(tmp_path / "out")])
+
+
+def test_script_resume_from_the_command_line(tmp_path, monkeypatch):
+    from fifo_rl.agents.dqn import DQNAgent
+    monkeypatch.chdir(tmp_path)
+    ckpt = pretrained(tmp_path, lr=5e-4)
+    run_campaign.main(["train", "--resume", str(ckpt), "--seed", "7", "--lr", "2e-4", "--n-campaigns", "2",
+                       "--eval-every", "2", "--eval-campaigns", "2", "--campaign-budget", "4",
+                       "--out", str(tmp_path / "res")])
+    agent = DQNAgent.load(tmp_path / "res" / "last.pt")
+    assert agent.cfg["lr"] == 2e-4  # given on the command line
+    assert agent.cfg["learning_starts"] == 10 and agent.cfg["batch_size"] == 8  # kept from the checkpoint
