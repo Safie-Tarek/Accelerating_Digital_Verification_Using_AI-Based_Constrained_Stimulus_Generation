@@ -19,6 +19,8 @@ RL agent for the FIFO testbench in `../src codes/`. Two designs live side by sid
 | `fifo_rl/agents/networks.py` | `QNetwork`: MLP state → one Q-value per action (87 → 128 → 128 → 22 by default) |
 | `fifo_rl/agents/dqn.py` | `DQNAgent`: ε-greedy `act`, `observe`, `learn` (DQN or DDQN target, Huber loss, target net), `save` / `load` |
 | `fifo_rl/agents/stub_agent.py` | `StubAgent`: Contract E interface without learning, for tests and plumbing checks |
+| `fifo_rl/agents/a2c.py` | `A2CAgent` (Contract F): actor + critic (two `QNetwork`s), legality mask, `act`, `observe`, `learn` (GAE, policy + value + entropy loss), `save` / `load`; see "A2C agent" below |
+| `fifo_rl/agents/rollout_buffer.py` | `RolloutBuffer` (on-policy memory of the last whole tests) and `compute_gae` (advantages and returns) |
 | `configs/default.yaml`, `fifo_rl/config.py` | DQN / DDQN settings; `load_config`, CLI overrides (`--double false`) |
 | `scripts/train.py` | Train DQN / DDQN on the fake FIFO, greedy evaluation every `eval_every` episodes, checkpoints |
 | `scripts/evaluate.py`, `scripts/plot.py` | Run the baselines / a trained agent and plot them (see below) |
@@ -110,3 +112,77 @@ until the verification team delivers its own. Tool folder, suffix and paths are 
 ```bash
 FIFO_RL_QUESTA=1 pytest -q tests/test_questa_real.py
 ```
+
+## A2C agent (actor-critic, plan-based campaigns)
+
+A second learning agent for the same game as the DQN: the same 9 blocks, the same 93-number state and the same campaigns.
+It plugs into `CampaignRunner` like `DQNAgent` does, with no change to the runner, launchers or reward.
+
+- **Actor:** `QNetwork(93, a2c_hidden, 9)`. The softmax of its scores is the policy π, the probability of each block.
+- **Critic:** `QNetwork(93, a2c_hidden, 1)`. It gives V(s), its guess of the reward still to come.
+- **Advantage:** A = how much better a block did than the critic expected. One update raises π for blocks with A > 0 and lowers it for blocks with A < 0, while V moves toward what really came back.
+- **Exploration:** the agent samples from π, and an entropy bonus keeps π spread out. There is no ε, so `agent.epsilon` is always 0.0.
+- **On-policy:** `learn()` returns `None` until the rollout holds `a2c_rollout_tests` whole tests (each ends with `END_TEST`) or the campaign ended. So an update never falls in the middle of a test, and the data always comes from the current policy.
+- **Legality mask:** in a full plan (`state[-2] == 1.0`), `PlanBuilder` adds `END_TEST` itself. The mask allows only `END_TEST` there, so π(END_TEST) = 1 and the actor learns nothing from a choice it did not make. No other block is ever masked.
+
+**Contract F** (agreed by Mohamed and Jana):
+
+```python
+agent = A2CAgent(state_dim=93, n_actions=9, cfg=cfg, seed=0)
+agent.name -> "a2c";  agent.steps;  agent.updates;  agent.epsilon -> 0.0
+agent.act(state, greedy=False) -> int      # greedy=True: most likely block (GreedyWrapper uses it)
+agent.observe(s, a, r, s2, done)           # what CampaignRunner passes for every transition
+agent.learn() -> float | None              # None until whole tests are stored, then one update
+agent.last_stats -> {"policy_loss", "value_loss", "entropy", "n_transitions"}
+agent.save(path);  A2CAgent.load(path)     # one file; load refuses a DQN checkpoint
+```
+
+**Config keys it reads.** Every key must also exist in `configs/default.yaml`, because `config.py` rejects unknown keys.
+
+| Key | Value | Meaning |
+|---|---|---|
+| `gamma` | 0.99 (give `--gamma 0.99`; the file's 0.9 is for the old 22-action DQN) | discount, shared with the DQN |
+| `a2c_hidden` | `[128, 128]` | hidden layers of the actor and of the critic |
+| `a2c_lr` | 7e-4 | Adam learning rate (one optimizer for both networks) |
+| `a2c_grad_clip` | 0.5 | gradient norm limit per update |
+| `vf_coef` | 0.5 | weight of the critic's loss |
+| `ent_coef` | 0.01 | weight of the entropy bonus |
+| `gae_lambda` | 0.95 | GAE λ (1.0 = plain discounted return) |
+| `a2c_rollout_tests` | 4 | whole tests per update |
+| `a2c_normalize_adv` | true | normalize advantages (only in rollouts of 8 or more transitions) |
+
+**Wiring in `scripts/run_campaign.py`** (Jana's part):
+- `--agent a2c`
+- a factory: `A2CAgent(runner.state_size, runner.n_actions, cfg, seed=cfg["seed"])`. It needs no buffer or schedule, so `make_agent` cannot be reused.
+- `eval_agent`: `GreedyWrapper(A2CAgent.load(checkpoint))`
+- refuse `--resume` for a2c (`resume_agent` is DQN-only)
+- optionally, the `last_stats` numbers as log columns
+
+`train()` already calls `agent.save(...)` for `best.pt` / `last.pt`, so that part needs no change.
+
+**First results** (fake FIFO, 2026-11-26):
+- Set-up: scratch script with the `run_campaign` protocol, step-2 reward, γ 0.99, 3 seeds × 1,000 campaigns.
+- `best.pt` was evaluated greedily on the 200 unseen campaigns of seed + 2000, the same set the step-2 DDQN results use.
+
+| Agent | Closed | Tests per campaign | Cycles per campaign |
+|---|---|---|---|
+| Random block each step | 98.5% | 8.86 | 459 |
+| **A2C** (seeds 0 / 1 / 2) | **100%** | **1.81** (1.77 / 1.74 / 1.92) | **327** (320 / 315 / 347) |
+| Constrained random in plans (always `BASELINE`) | 100% | 1.77 | 320 |
+| Step-2 DDQN (`docs/random_vs_step1_vs_step2.md`) | 100% | 2.14 ± 0.44 | 260 ± 60 |
+
+What the results show:
+- A2C learns in 200–400 campaigns, and 1,000 campaigns take 1–2 minutes on CPU.
+- With `ent_coef 0.01` no seed collapsed later on: its final weights were as good as its best ones.
+- **But every seed settled on `BASELINE` ×10**, which is constrained random inside a plan. So it matches CRV in tests and cycles, and it does not find the ordered 9-block plan that closes in 1 test.
+- `ent_coef` 0.05 and 0.1 gave the same plan and less stable training (one seed's last weights fell to 48% closure).
+- The reward charges nothing for cycles (`cycle_cost: 0`), so nothing pushes toward short, ordered plans. Changing that is a team decision about the shared reward.
+
+**Tests:** `tests/test_rollout_buffer.py` and `tests/test_a2c.py` cover:
+- GAE worked out by hand, and the losses of one update rebuilt from the formulas
+- the mask, and the forced `END_TEST` never moving the actor
+- no update in the middle of a test
+- save / load giving an identical agent that keeps learning
+- one run through the real campaign loop
+
+A mutation check (18 bugs planted on purpose, one at a time, in a copy) was caught 18 of 18 times.
