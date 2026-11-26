@@ -194,6 +194,35 @@ def test_entropy_bonus_keeps_the_dice_open():
     assert curious.probabilities(real_state(0))[WRITE] < greedy.probabilities(real_state(0))[WRITE]
 
 
+def test_learn_computes_the_losses_of_the_formulas():
+    """The numbers of one update, rebuilt by hand from the critic's V(s), V(s2) and the policy.
+
+    One test (WRITE, WRITE, END_TEST) that does not end the campaign, so every step needs the value
+    of its NEXT state: A, R = compute_gae(r, V(s), V(s2), done); 3 transitions -> no normalization.
+    """
+    from fifo_rl.agents.rollout_buffer import compute_gae
+
+    agent = make_agent(a2c_rollout_tests=1)
+    states = np.stack([real_state(0), real_state(1), real_state(2)])
+    next_states = np.stack([real_state(1), real_state(2), real_state(0)])
+    actions, rewards = [WRITE, WRITE, END_TEST_ID], [0.3, 0.0, 0.1]
+    probs = agent.probabilities(states)
+    advantages, returns = compute_gae(rewards, agent.values(states), agent.values(next_states), [0, 0, 0],
+                                      gamma=0.99, lam=0.95)
+    policy_loss = -np.mean(np.log(probs[np.arange(3), actions]) * advantages)
+    value_loss = np.mean((returns - agent.values(states)) ** 2)
+    entropy = np.mean(-(probs * np.log(probs)).sum(axis=1))
+
+    for s, a, r, s2 in zip(states, actions, rewards, next_states):
+        agent.observe(s, a, r, s2, False)
+    loss = agent.learn()
+    stats = agent.last_stats
+    assert stats["policy_loss"] == pytest.approx(policy_loss, abs=1e-5)
+    assert stats["value_loss"] == pytest.approx(value_loss, abs=1e-6)
+    assert stats["entropy"] == pytest.approx(entropy, abs=1e-5)
+    assert loss == pytest.approx(policy_loss + 0.5 * value_loss - 0.01 * entropy, abs=1e-5)
+
+
 def test_tiny_and_big_rollouts_give_finite_numbers():
     tiny = make_agent()
     tiny.observe(real_state(0), END_TEST_ID, 0.5, real_state(0), True)    # an empty test, campaign over
@@ -246,6 +275,28 @@ def test_load_refuses_a_dqn_checkpoint(tmp_path):
     DQNAgent(STATE_DIM, N_ACTIONS, load_config()).save(tmp_path / "dqn.pt")
     with pytest.raises(ValueError, match="dqn"):
         A2CAgent.load(tmp_path / "dqn.pt")
+
+
+# --- with the real campaign loop (CampaignRunner + fake FIFO, step-2 reward) ---------------------
+
+def test_trains_and_plays_whole_campaigns_on_the_fake_fifo(tmp_path):
+    from fifo_rl.campaign.campaign_runner import CampaignRunner, RunConfig
+    from fifo_rl.evaluation import GreedyWrapper
+    from fifo_rl.launchers.fake_launcher import FakeLauncher
+
+    config = RunConfig(campaign_budget=5, reward_mode="action", run_root=tmp_path)
+    runner = CampaignRunner(config, FakeLauncher(per_action=True))
+    agent = A2CAgent(runner.state_size, runner.n_actions, a2c_cfg(a2c_rollout_tests=2), seed=0)
+    losses, n_transitions = [], []
+    for _ in range(3):
+        result = runner.run_campaign(agent, train=True, train_freq=1,
+                                     on_test=lambda summary, transitions, test_losses: n_transitions.append(len(transitions)))
+        losses += result.losses
+        assert len(agent.rollout) == 0                      # every campaign ends with an update (done)
+    assert agent.updates == len(losses) >= 3 and all(np.isfinite(losses))
+    assert agent.steps == sum(n_transitions)                # every block of every test was observed once
+    played = runner.run_campaign(GreedyWrapper(agent))      # evaluation: greedy, no learning
+    assert played.tests_used >= 1 and agent.updates == len(losses)
 
 
 def test_gradient_is_clipped():
