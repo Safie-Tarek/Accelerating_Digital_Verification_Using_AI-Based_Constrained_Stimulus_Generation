@@ -1,0 +1,18 @@
+.bender
+
+# QuestaSim / ModelSim artifacts when commands run from the repository root
+/work/
+/worklib/
+/modelsim.ini
+/transcript
+/*.wlf
+/*.vcd
+/*.ucdb
+/*.qdb
+/*.qpg
+/*.qtl
+/*.vstf
+/*.mti
+/*.cr.mti
+/*.log
+*.mpf

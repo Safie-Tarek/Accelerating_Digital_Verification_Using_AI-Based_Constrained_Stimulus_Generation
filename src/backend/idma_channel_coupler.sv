@@ -1,0 +1,190 @@
+// Copyright 2023 ETH Zurich and University of Bologna.
+// Solderpad Hardware License, Version 0.51, see LICENSE for details.
+// SPDX-License-Identifier: SHL-0.51
+
+// Authors:
+// - Thomas Benz <tbenz@iis.ee.ethz.ch>
+
+`include "common_cells/registers.svh"
+`include "axi/typedef.svh"
+
+/// Couples the `R` to the `AW` channel by keeping writes back until the corresponding
+/// reads arrive at the DMA. This reduces the congestion in the memory system.
+module idma_channel_coupler #(
+    /// Number of transaction that can be in-flight concurrently
+    parameter int unsigned NumAxInFlight = 32'd2,
+    /// Address width
+    parameter int unsigned AddrWidth = 32'd24,
+    /// AXI user width
+    parameter int unsigned UserWidth = 32'd1,
+    /// AXI ID width
+    parameter int unsigned AxiIdWidth = 32'd1,
+    /// Print the info of the FIFO configuration
+    parameter bit PrintFifoInfo = 1'b0,
+    /// AXI 4 `AW` channel type
+    parameter type axi_aw_chan_t = logic
+)(
+    /// Clock
+    input  logic clk_i,
+    /// Asynchronous reset, active low
+    input  logic rst_ni,
+
+    /// W request valid
+    input  logic w_req_valid_i,
+    /// W request ready
+    input  logic w_req_ready_i,
+    /// First W request
+    input  logic w_req_first_i,
+    /// Does the `W` burst belong to a decoupled request?
+    input  logic w_decouple_aw_i,
+    /// Is the `AW` in the queue a decoupled request?
+    input  logic aw_decouple_aw_i,
+
+    /// Original meta request
+    input  axi_aw_chan_t aw_req_i,
+    /// Original meta request valid
+    input  logic aw_valid_i,
+    /// Original meta request ready
+    output logic aw_ready_o,
+
+    /// Modified meta request
+    output axi_aw_chan_t aw_req_o,
+    /// Modified meta request valid
+    output logic aw_valid_o,
+    /// Modified meta request ready
+    input  logic aw_ready_i,
+    /// busy signal
+    output logic busy_o
+);
+
+    /// The width of the credit counter keeping track of the transfers
+    localparam int unsigned CounterWidth = cc_pkg::cnt_width(NumAxInFlight);
+
+    /// Credit counter type
+    typedef logic [CounterWidth-1:0] cnt_t;
+    /// Address type
+    typedef logic [AddrWidth-1:0]    addr_t;
+    /// User type
+    typedef logic [UserWidth-1:0]    user_t;
+    /// ID type
+    typedef logic [AxiIdWidth-1:0]   id_t;
+
+    // cut signals after the fifo
+    logic    aw_ready, aw_valid;
+    logic    aw_decoupled_head;
+
+    // first R arrives -> AW can be sent
+    logic first;
+
+    // aw ready i decoupled
+    logic aw_ready_decoupled;
+
+    // aw is being sent
+    logic aw_sent;
+
+    // counter to keep track of AR to send
+    cnt_t aw_to_send_d, aw_to_send_q;
+
+    logic aw_stall_d, aw_stall_q;
+
+    // first signal -> a W has data that needs to free an AW
+    assign first = w_req_valid_i & w_req_first_i & ~aw_stall_q & ~w_decouple_aw_i;
+    assign aw_stall_d = w_req_valid_i & ~w_req_ready_i;
+
+    // stream fifo to hold AWs back
+    cc_stream_fifo_optimal_wrap #(
+        .Depth        ( NumAxInFlight ),
+        .data_t       ( axi_aw_chan_t ),
+        .PrintInfo    ( PrintFifoInfo )
+    ) i_aw_store (
+        .clk_i,
+        .rst_ni,
+        .clr_i        ( 1'b0                ),
+        .flush_i      ( 1'b0                ),
+        .usage_o      ( /* NOT CONNECTED */ ),
+        .data_i       ( aw_req_i            ),
+        .valid_i      ( aw_valid_i          ),
+        .ready_o      ( aw_ready_o          ),
+        .data_o       ( aw_req_o            ),
+        .valid_o      ( aw_valid            ),
+        .ready_i      ( aw_ready            )
+    );
+
+    cc_stream_fifo_optimal_wrap #(
+        .Depth        ( NumAxInFlight ),
+        .data_t       ( logic         ),
+        .PrintInfo    ( PrintFifoInfo )
+    ) i_aw_decoupled_store (
+        .clk_i,
+        .rst_ni,
+        .clr_i        ( 1'b0                ),
+        .flush_i      ( 1'b0                ),
+        .usage_o      ( /* NOT CONNECTED */ ),
+        .data_i       ( aw_decouple_aw_i    ),
+        .valid_i      ( aw_valid_i          ),
+        .ready_o      ( /* NOT CONNECTED */ ),
+        .data_o       ( aw_decoupled_head   ),
+        .valid_o      ( /* NOT CONNECTED */ ),
+        .ready_i      ( aw_ready            )
+    );
+
+    // use a credit counter to keep track of AWs to send
+    always_comb begin : proc_credit_cnt
+
+        // defaults
+        aw_to_send_d = aw_to_send_q;
+        aw_sent      = 1'b0;
+
+        // a decoupled AW at the head is released without consuming a credit
+        if (aw_valid & aw_decoupled_head) begin
+            aw_sent = 1'b1;
+            if (first) begin
+                aw_to_send_d = aw_to_send_q + 1;
+            end
+        end
+
+        // a coupled AW at the head is released against a credit
+        else if (aw_valid & (first | (aw_to_send_q != '0))) begin
+            aw_sent = 1'b1;
+            // the credit is consumed only once the AW is actually accepted
+            if (aw_ready_decoupled & !first) begin
+                aw_to_send_d = aw_to_send_q - 1;
+            end else if (!aw_ready_decoupled & first) begin
+                aw_to_send_d = aw_to_send_q + 1;
+            end
+        end
+
+        // no AW can be released this cycle -> bank the credit
+        else if (first) begin
+            aw_to_send_d = aw_to_send_q + 1;
+        end
+    end
+
+    // assign outputs
+    assign aw_ready = aw_valid_o & aw_ready_i;
+
+    // fall through register to decouple the aw valid signal from the aw ready
+    // no payload is required; just the decoupling of the handshaking signals
+    cc_fall_through_register #(
+        .data_t ( logic [0:0] )
+    ) i_fall_through_register_decouple_aw_valid (
+        .clk_i,
+        .rst_ni,
+        .clr_i       ( 1'b0                ),
+        .valid_i     ( aw_sent             ),
+        .ready_o     ( aw_ready_decoupled  ),
+        .data_i      ( 1'b0                ),
+        .valid_o     ( aw_valid_o          ),
+        .ready_i     ( aw_ready_i          ),
+        .data_o      ( /* NOT CONNECTED */ )
+    );
+
+    // connect busy pin
+    assign busy_o = aw_valid;
+
+    // state
+    `FF(aw_to_send_q, aw_to_send_d, '0, clk_i, rst_ni)
+    `FF(aw_stall_q, aw_stall_d, '0, clk_i, rst_ni)
+
+
+endmodule

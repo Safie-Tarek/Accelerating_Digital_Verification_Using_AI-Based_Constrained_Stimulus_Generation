@@ -1,6 +1,19 @@
-**/*
-*
-!.gitignore
-!start.tcl
-!wave/tpl*
-!jobs
+# QuestaSim / ModelSim generated libraries and run artifacts
+**/work/
+**/worklib/
+**/modelsim.ini
+**/transcript
+**/*.wlf
+**/*.vcd
+**/*.ucdb
+**/*.qdb
+**/*.qpg
+**/*.qtl
+**/*.vstf
+**/*.mti
+**/*.cr.mti
+**/*.log
+
+# Keep waveform templates; ignore generated wave files and directories.
+/wave/*
+!/wave/tpl*
