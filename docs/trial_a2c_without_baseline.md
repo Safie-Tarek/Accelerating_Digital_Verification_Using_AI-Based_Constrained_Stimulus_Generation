@@ -248,8 +248,8 @@ That is an honest result and a real lesson. It is not proof that RL beats constr
 
 | | Experiment | Question it answers | Status |
 |---|---|---|---|
-| A | **DDQN with the same 7 actions** (no `BASELINE`, no `RAND50`), step-2 DDQN settings (2,000 campaigns, γ 0.99, lr 5e-4, ε decay 80,000, seeds 0–2) | Does the gain come from the action set or from A2C? | running (2026-11-27) |
-| B | **All 9 actions, but the random blocks cost something** (a per-block cost for `BASELINE` / `RAND50`, or a non-zero `cycle_cost`) | Does the agent avoid the shortcuts *by itself*? Then nobody has to choose the action set by hand, which is the more convincing version. | implemented on branch `feat/random-block-cost` (`random_block_cost`, `random_blocks`); A2C sweep running (2026-11-27) |
+| A | **DDQN with the same 7 actions** (no `BASELINE`, no `RAND50`), step-2 DDQN settings (2,000 campaigns, γ 0.99, lr 5e-4, ε decay 80,000, seeds 0–2) | Does the gain come from the action set or from A2C? | first try stopped at campaign ~545 (0% greedy, CPU overloaded by 12 runs); restarted single-threaded 2026-11-28 |
+| B | **All 9 actions, but the random blocks cost something** (a per-block cost for `BASELINE` / `RAND50`, or a non-zero `cycle_cost`) | Does the agent avoid the shortcuts *by itself*? Then nobody has to choose the action set by hand, which is the more convincing version. | done for A2C (2026-11-28), results in §9.5 |
 | B2 | **`cycle_cost` instead of a random-block cost** (e.g. 0.005, 0.01; no code change) | Does a cost on real simulation time give the same effect, without penalizing randomness itself? (§9.4) | to do |
 | C | **A harder coverage model**, where the best test is not obvious (e.g. cross coverage, sequences, rare corner cases) | Does RL beat constrained random where it is supposed to? | longer term |
 
@@ -340,6 +340,58 @@ Steps:
 - **Optionally, start the cost at 0 and raise it during training** (a curriculum). The agent first learns what random blocks are good for, and only later learns to economize.
 
 **For the report:** present `random_block_cost` as an experiment on this FIFO. It shows that the agent can trade random traffic for directed tests when both cover the same bins. The general recommendation is a cost on real resources (cycles and tests).
+
+### 9.5 Results of experiment B (cost on random blocks, A2C)
+
+**Set-up:** branch `feat/random-block-cost`. A2C with **all 9 actions**, step-2 reward, γ 0.99, `random_blocks: [BASELINE, RAND50]`, `random_block_cost` ∈ {0.25, 0.5, 1.0}, 3 seeds × 3,000 campaigns each. `best.pt` evaluated greedily on 300 unseen fake campaigns (2026-11-28).
+
+| Cost per random block | Closed | Expected tests | Cycles | Random blocks in the plans |
+|---|---|---|---|---|
+| 0 (A2C, all 9 actions, `docs/a2c_vs_ddqn_results.md`) | 100% | 1.70 | 294 | ~96% |
+| 0.25 | 100% | 1.72 | 301 | 92% |
+| 0.5 | 100% | 2.01 | 301 | 63% |
+| **1.0** | 99.6% | 2.12 | **152** | **0%** |
+| *Forbidden instead of costed (Trial 2, §6)* | 99.9% | **1.04** | **82** | 0% |
+
+Per seed (tests / cycles / random share):
+
+| Cost | Seed 0 | Seed 1 | Seed 2 |
+|---|---|---|---|
+| 0.25 | 1.72 / 311 / 100% | 1.71 / 294 / 88% | 1.73 / 298 / 89% |
+| 0.5 | 1.72 / 311 / 100% | 1.95 / 259 / 40% | 2.35 / 333 / 50% |
+| 1.0 | 2.28 / 137 / 0% (99.0% closed) | 2.09 / 158 / 0% (99.7%) | 2.00 / 160 / 0% (100%) |
+
+**Plans learned (greedy, `best.pt`):**
+- Cost 0.25: `BASELINE` ×10, or `BASELINE` with a `WRITE` every 4th block. Almost the same as no cost.
+- Cost 0.5: one seed `BASELINE` ×10; two seeds alternate `BASELINE` and `WRITE` (`BASELINE WRITE BASELINE WRITE …`).
+- Cost 1.0: no random block at all, in two directed tests, e.g. seed 2:
+  ```text
+  test 1: RESET_TRAFFIC WRITE READ WRITE_READ IDLE RESET_TRAFFIC RESET_TRAFFIC WRITE READ WRITE_READ
+  test 2: IDLE WRITE IDLE WRITE_READ IDLE WRITE IDLE WRITE_READ IDLE WRITE
+  ```
+
+**What it shows:**
+1. **The cost works like a dial.** The share of random blocks falls from ~90% (0.25) to ~60% (0.5) to **0%** (1.0). At cost 1.0 the agent gives up random traffic **by itself**, with all 9 actions available.
+2. **Cost 1.0 halves the cycles** compared with no cost (152 vs 294), with directed plans of the same style as Trial 2.
+3. **But it needs ~2 tests instead of ~1.7 (no cost) or 1.04 (Trial 2).** On the main metric (tests), cost 1.0 is *worse* than no cost. The reason is the price list in the reward:
+   - an extra test costs `step_cost` = 1 bin;
+   - a plan of 10 random blocks costs 10 bins.
+   So with cost 1.0, two directed tests are cheaper for the agent than one test with random traffic. The agent did exactly what the reward asked. Getting one directed test needs the agent to pack all bins into one plan, which Trial 2 learned but the costed runs did not (yet) within 3,000 campaigns.
+4. **The risk from §9.4 showed up, in a small way:** at cost 1.0, 4 of 900 campaigns did not close (seed 0: 3, seed 1: 1). With random blocks too expensive, the agent had no fallback when its directed plans missed a bin.
+5. **0.5 is the worst setting:** it changes the plans without making them better (2.01 tests, the same cycles as no cost) and was the most unstable during training (validation jumping between 14% and 100%).
+6. **Cost 0.25 is too small to matter.**
+
+**Conclusion for the report:** a cost on random blocks can make the agent drop them by itself (at 1.0), and cycles halve. But the result depends on how that cost compares with the price of a test, and it never matched forbidding the blocks (Trial 2: 1 test, 82 cycles). The cost is a sensitive knob; §9.4's recommendation (cost on real resources, `cycle_cost`, experiment B2) still stands.
+
+**Data** (git-ignored): `fifo_rl/runs/campaign/a2c_cost/cost{0.25,0.5,1.0}_seed{0,1,2}/` (training) and `evalfake300_cost*_seed*/` (evaluation). Reproduce one run:
+
+```bash
+python -m scripts.run_campaign train --agent a2c --reward-mode action --gamma 0.99 --random-block-cost 1.0 \
+       --seed 0 --out runs/campaign/a2c_cost/cost1.0_seed0
+python -m scripts.run_campaign eval --agent a2c --checkpoint runs/campaign/a2c_cost/cost1.0_seed0/best.pt \
+       --eval-campaigns 300 --reward-mode action --gamma 0.99 --random-block-cost 1.0 --seed 0 \
+       --out runs/campaign/a2c_cost/evalfake300_cost1.0_seed0
+```
 
 ## 10. Limits and follow-ups
 
