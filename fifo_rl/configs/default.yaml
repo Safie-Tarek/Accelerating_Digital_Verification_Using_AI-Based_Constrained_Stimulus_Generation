@@ -39,6 +39,17 @@ reward_mode: test         # test = step 1 (one report per test, reward on END_TE
 n_campaigns: 3000         # training campaigns
 eval_campaigns: 50        # greedy campaigns per evaluation
 
+# A2C agent (fifo_rl/agents/a2c.py, Contract F); train with --agent a2c --gamma 0.99.
+# Prefixed (a2c_*) where the DQN has a key of the same meaning, so the DQN defaults stay as they are.
+a2c_hidden: [128, 128]    # hidden layers of the actor and of the critic (two separate networks)
+a2c_lr: 7.0e-4            # Adam learning rate, one optimizer for both networks
+a2c_grad_clip: 0.5        # gradient norm is cut to this size in every update
+vf_coef: 0.5              # weight of the critic's loss
+ent_coef: 0.01            # weight of the entropy bonus (keeps the policy from settling too early)
+gae_lambda: 0.95          # GAE lambda (1.0 = plain discounted return)
+a2c_rollout_tests: 4      # whole tests (each ends with END_TEST) per update
+a2c_normalize_adv: true   # normalize advantages (only in rollouts of 8 or more transitions)
+
 # real Questa (fifo_rl/launchers/questa_launcher.py)
 questa_bin: ""            # folder of vsim/vcover/vlib/vlog; "" = on PATH
 questa_tool_suffix: .exe  # .exe for Windows Questa (also from WSL), "" for Linux Questa

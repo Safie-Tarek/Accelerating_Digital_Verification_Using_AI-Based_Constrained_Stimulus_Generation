@@ -321,7 +321,8 @@ def test_resume_refuses_to_write_into_the_checkpoint_folder(tmp_path, monkeypatc
         run_campaign.train(resume_cfg(), ckpt.parent, DQNAgent, verbose=False, resume=ckpt)
 
 
-@pytest.mark.parametrize("argv", [["train", "--agent", "stub"], ["eval", "--agent", "dqn", "--checkpoint", "x.pt"]])
+@pytest.mark.parametrize("argv", [["train", "--agent", "stub"], ["train", "--agent", "a2c"],
+                                  ["eval", "--agent", "dqn", "--checkpoint", "x.pt"]])
 def test_resume_needs_train_with_the_dqn(tmp_path, monkeypatch, argv):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit, match="--resume"):
@@ -338,3 +339,99 @@ def test_script_resume_from_the_command_line(tmp_path, monkeypatch):
     agent = DQNAgent.load(tmp_path / "res" / "last.pt")
     assert agent.cfg["lr"] == 2e-4  # given on the command line
     assert agent.cfg["learning_starts"] == 10 and agent.cfg["batch_size"] == 8  # kept from the checkpoint
+
+
+# ---------- A2C wiring (Contract F) ----------
+
+def a2c_small_cfg(**kw):
+    return small_cfg(reward_mode="action", gamma=0.99, a2c_hidden=[16, 16], a2c_rollout_tests=1, **kw)
+
+
+def test_default_config_has_the_a2c_keys():
+    cfg = load_config()
+    assert cfg["a2c_hidden"] == [128, 128] and cfg["a2c_lr"] == pytest.approx(7e-4)
+    assert (cfg["a2c_grad_clip"], cfg["vf_coef"], cfg["ent_coef"], cfg["gae_lambda"]) == (0.5, 0.5, 0.01, 0.95)
+    assert cfg["a2c_rollout_tests"] == 4 and cfg["a2c_normalize_adv"] is True
+    assert (cfg["hidden"], cfg["lr"], cfg["grad_clip"]) == ([128, 128], 1e-3, 10.0)  # DQN defaults unchanged
+
+
+def test_script_train_with_the_a2c_logs_its_losses(tmp_path, monkeypatch):
+    from fifo_rl.agents.a2c import A2CAgent
+    monkeypatch.chdir(tmp_path)
+    run_campaign.train(a2c_small_cfg(), tmp_path / "out", A2CAgent, verbose=False)
+    agent = A2CAgent.load(tmp_path / "out" / "best.pt")
+    assert (agent.state_dim, agent.n_actions) == (93, 9) and agent.updates > 0
+    train_rows = [r for r in rows(tmp_path / "out" / "tests.csv") if r["phase"] == "train"]
+    assert all(r["epsilon"] == "0.0" for r in train_rows)
+    updated = [r for r in train_rows if r["loss"]]
+    assert updated and all(r["policy_loss"] and r["value_loss"] and r["entropy"] for r in updated)
+    assert all(not r["entropy"] for r in train_rows if not r["loss"])  # stats only on tests with an update
+    assert all(r["tests_charged_mean"] for r in rows(tmp_path / "out" / "eval.csv"))
+
+
+def test_script_train_and_eval_a2c_from_the_command_line(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    common = ["--reward-mode", "action", "--gamma", "0.99", "--a2c-hidden", "[16,16]", "--campaign-budget", "4"]
+    run_campaign.main(["train", "--agent", "a2c", "--n-campaigns", "2", "--eval-every", "2",
+                       "--eval-campaigns", "2", "--out", str(tmp_path / "tr")] + common)
+    assert json.loads((tmp_path / "tr" / "summary.json").read_text())["agent"] == "a2c"
+    run_campaign.main(["eval", "--agent", "a2c", "--checkpoint", str(tmp_path / "tr" / "best.pt"),
+                       "--eval-campaigns", "3", "--out", str(tmp_path / "ev")] + common)
+    summary = json.loads((tmp_path / "ev" / "summary.json").read_text())
+    assert summary["agent"] == "a2c" and summary["campaigns"] == 3 and summary["tests_charged"]["mean"] > 0
+    for out in ("s1", "s2"):  # sampled play: its own name, and the same seed replays the same blocks
+        run_campaign.main(["eval", "--agent", "a2c", "--sample", "--checkpoint", str(tmp_path / "tr" / "best.pt"),
+                           "--eval-campaigns", "3", "--out", str(tmp_path / out)] + common)
+    assert json.loads((tmp_path / "s1" / "summary.json").read_text())["agent"] == "a2c_sampled"
+    assert [r["actions"] for r in rows(tmp_path / "s1" / "tests.csv")] ==         [r["actions"] for r in rows(tmp_path / "s2" / "tests.csv")]
+    with pytest.raises(SystemExit, match="--sample"):
+        run_campaign.main(["eval", "--agent", "random", "--sample", "--out", str(tmp_path / "x")])
+
+
+def test_eval_a2c_needs_an_a2c_checkpoint(tmp_path, monkeypatch):
+    from fifo_rl.agents.dqn import DQNAgent
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit, match="a2c"):
+        run_campaign.main(["eval", "--agent", "a2c", "--out", str(tmp_path / "ev")])
+    run_campaign.train(small_cfg(learning_starts=10, batch_size=8), tmp_path / "dqn", DQNAgent, verbose=False)
+    with pytest.raises(ValueError, match="not an A2C"):
+        run_campaign.eval_agent("a2c", tmp_path / "dqn" / "best.pt", small_cfg())
+
+
+# ---------- the shared checkpoint-selection rule ----------
+
+class _Result:
+    def __init__(self, tests_used, closed, cycles=100):
+        self.tests_used, self.closed, self.total_cycles = tests_used, closed, cycles
+        self.tests, self.final_bins, self.episode_return, self.wall_time = [], 64, 0.0, 0.0
+
+
+def test_a_failed_campaign_is_charged_the_whole_budget():
+    s = run_campaign.summarize([_Result(2, True), _Result(5, False)], budget=30)  # stopped early, still 30
+    assert s["tests_charged"]["mean"] == pytest.approx(16.0)
+    assert s["tests_used"]["mean"] == pytest.approx(3.5)
+
+
+def test_score_prefers_fewer_expected_tests_over_closure_rate():
+    """The case of docs/fifo_rl_finetune_results.md round 2: 99.5% closure in 1.77 tests must beat
+    100% closure in 3.86 tests (the old closure-first rule picked the second)."""
+    fast = run_campaign.summarize([_Result(1, True)] * 199 + [_Result(30, False)], budget=30)  # 1.145 expected
+    slow = run_campaign.summarize([_Result(4, True)] * 200, budget=30)
+    assert fast["closure_rate"] < slow["closure_rate"]
+    assert run_campaign.score(fast) > run_campaign.score(slow)
+
+
+def test_score_breaks_ties_on_cycles():
+    short = run_campaign.summarize([_Result(2, True, cycles=200)], budget=30)
+    long = run_campaign.summarize([_Result(2, True, cycles=300)], budget=30)
+    assert run_campaign.score(short) > run_campaign.score(long)
+
+
+def test_plot_campaign_draws_the_a2c_run(tmp_path, monkeypatch):
+    from fifo_rl.agents.a2c import A2CAgent
+    from scripts import plot_campaign
+    monkeypatch.chdir(tmp_path)
+    for seed in (0, 1):
+        run_campaign.train(a2c_small_cfg(seed=seed), tmp_path / f"a2c{seed}", A2CAgent, verbose=False)
+    plot_campaign.main([str(tmp_path / "a2c0"), str(tmp_path / "a2c1"), "--out", str(tmp_path / "plots")])
+    assert (tmp_path / "plots" / "validation.png").is_file() and (tmp_path / "plots" / "a2c_losses.png").is_file()
