@@ -82,6 +82,7 @@ reward goes to its `END_TEST` step. Design and reasons: `../docs/fifo_agent_cont
 | `fifo_rl/questa/result_parser.py` | `ResultParser`: pass / errors from `result.txt`, else from the UVM summary in the log |
 | `fifo_rl/campaign/` | `RewardAttributor`, `CampaignStore`, `TrajectoryBuilder`, `CampaignRunner` (the loop) |
 | `scripts/run_campaign.py` | Train / evaluate on campaigns; one CSV row per test (cycles, wall time, new bins, ...) |
+| `scripts/plot_campaign.py` | Validation curves (expected tests, closure) of several training runs, mean and range over seeds; A2C losses and entropy |
 
 ```bash
 python -m scripts.run_campaign train --gamma 0.99 --eps-decay-steps 80000           # DDQN on the fake FIFO
@@ -151,14 +152,37 @@ agent.save(path);  A2CAgent.load(path)     # one file; load refuses a DQN checkp
 | `a2c_rollout_tests` | 4 | whole tests per update |
 | `a2c_normalize_adv` | true | normalize advantages (only in rollouts of 8 or more transitions) |
 
-**Wiring in `scripts/run_campaign.py`** (Jana's part):
-- `--agent a2c`
-- a factory: `A2CAgent(runner.state_size, runner.n_actions, cfg, seed=cfg["seed"])`. It needs no buffer or schedule, so `make_agent` cannot be reused.
-- `eval_agent`: `GreedyWrapper(A2CAgent.load(checkpoint))`
-- refuse `--resume` for a2c (`resume_agent` is DQN-only)
-- optionally, the `last_stats` numbers as log columns
+**Running it** (`scripts/run_campaign.py`, from `fifo_rl/`):
 
-`train()` already calls `agent.save(...)` for `best.pt` / `last.pt`, so that part needs no change.
+```bash
+# train on the fake FIFO (step-2 reward)
+python -m scripts.run_campaign train --agent a2c --reward-mode action --gamma 0.99 --seed 0 \
+       --out runs/campaign/a2c_s2_seed0
+# evaluate greedily (most likely block) on 300 unseen fake campaigns
+python -m scripts.run_campaign eval --agent a2c --checkpoint runs/campaign/a2c_s2_seed0/best.pt \
+       --eval-campaigns 300 --reward-mode action --out runs/campaign/evalfake_a2c_s2_seed0
+# the same, rolling the policy's dice (sampled play; reseeded from the eval seed, so repeatable)
+python -m scripts.run_campaign eval --agent a2c --sample --checkpoint runs/campaign/a2c_s2_seed0/best.pt \
+       --eval-campaigns 300 --reward-mode action --out runs/campaign/evalfake_a2c_s2_seed0_sampled
+# real Questa (10 campaigns)
+python -m scripts.run_campaign eval --agent a2c --checkpoint runs/campaign/a2c_s2_seed0/best.pt \
+       --launcher questa --questa-bin C:/questasim64_2024.1/win64 --eval-campaigns 10 \
+       --reward-mode action --out runs/campaign/evalq_a2c_s2_seed0
+# validation curves and A2C losses of several runs
+python -m scripts.plot_campaign runs/campaign/a2c_s2_seed* --out runs/campaign/a2c_plots
+```
+
+- `--agent a2c` builds `A2CAgent(state_size, n_actions, cfg, seed)` directly (no replay buffer or ε schedule).
+- `eval --agent a2c` loads the checkpoint with `A2CAgent.load` (a DQN checkpoint is refused) and plays it through `GreedyWrapper`, or by sampling with `--sample`.
+- `--resume` is refused for A2C (it only knows how to resume a DQN).
+- `tests.csv` has three more columns, `policy_loss`, `value_loss` and `entropy`: the agent's `last_stats` after the last update in that test (empty for tests without an update, and for the DQN).
+
+**Checkpoint selection (both agents).** `best.pt` is the validation with the fewest **expected tests**, where a campaign that does not close counts as the full `campaign_budget`, then the fewest cycles (`score()` in `run_campaign.py`).
+The old rule ranked closure rate first, so one more closed campaign out of 50 beat an agent twice as fast (`../docs/fifo_rl_finetune_results.md`).
+`eval.csv` and `summary.json` have the number as `tests_charged`, and the training printout's `tests` column shows it.
+DDQN checkpoints trained before this change were picked by the old rule.
+
+**Full results** (3 seeds × 3,000 campaigns, fake FIFO and Questa, vs step-2 DDQN): `../docs/a2c_vs_ddqn_results.md`.
 
 **First results** (fake FIFO, 2026-11-26):
 - Set-up: scratch script with the `run_campaign` protocol, step-2 reward, γ 0.99, 3 seeds × 1,000 campaigns.
