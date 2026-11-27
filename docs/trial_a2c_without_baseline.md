@@ -250,6 +250,7 @@ That is an honest result and a real lesson. It is not proof that RL beats constr
 |---|---|---|---|
 | A | **DDQN with the same 7 actions** (no `BASELINE`, no `RAND50`), step-2 DDQN settings (2,000 campaigns, γ 0.99, lr 5e-4, ε decay 80,000, seeds 0–2) | Does the gain come from the action set or from A2C? | running (2026-11-27) |
 | B | **All 9 actions, but the random blocks cost something** (a per-block cost for `BASELINE` / `RAND50`, or a non-zero `cycle_cost`) | Does the agent avoid the shortcuts *by itself*? Then nobody has to choose the action set by hand, which is the more convincing version. | implemented on branch `feat/random-block-cost` (`random_block_cost`, `random_blocks`); A2C sweep running (2026-11-27) |
+| B2 | **`cycle_cost` instead of a random-block cost** (e.g. 0.005, 0.01; no code change) | Does a cost on real simulation time give the same effect, without penalizing randomness itself? (§9.4) | to do |
 | C | **A harder coverage model**, where the best test is not obvious (e.g. cross coverage, sequences, rare corner cases) | Does RL beat constrained random where it is supposed to? | longer term |
 
 Notes for B: `cycle_cost` changes the shared reward, so both agents must be retrained, and it is a team decision. A cost only on the random blocks is closer to Trial 2 (it makes them unattractive instead of forbidden). Start with a small value, so closing coverage still pays more than the cost.
@@ -306,6 +307,39 @@ Steps:
 9. **Experiment:** A2C (and later DDQN), all 9 actions, step-2 reward, γ 0.99, 3 seeds × 3,000 campaigns per cost value, plus `cycle_cost` ∈ {0.005, 0.01} as the no-code alternative. Report tests, cycles, closure, the share of random blocks in the learned plans, and Questa for the best setting.
 
 **Success looks like:** with all 9 actions available, the agent's plans use few or no `BASELINE` / `RAND50` blocks and reach Trial 2's level (~1 test, ~80 cycles), with nobody choosing the action set.
+
+### 9.4 Could a cost on random blocks hurt on another DUT?
+
+**Question:** on this FIFO random blocks are not needed. On a DUT where they *are* needed, would a cost stop the agent from choosing a best plan that contains a random block?
+
+**How the cost works: a price, not a ban.** For every block the agent effectively weighs "what it brings" against "what it costs":
+- With a cost of 1 bin, a random block that hits 5 bins nothing else can reach still earns 5 − 1 = 4, so the agent keeps using it.
+- It only drops random blocks when they bring about as much as a directed block would, which is the case on this FIFO, where directed blocks can hit every bin.
+- Seen in our runs: with cost 0.25 the agent still uses `BASELINE` heavily, because it is still worth it. `RESET_TRAFFIC` is random too, has no cost and is the only way to the reset bins, and the agent always uses it.
+- On a DUT where random traffic is truly needed (bins on data values, rare interleavings, …), a reasonable cost should therefore leave random blocks in the plan.
+
+**But there are two real risks:**
+
+1. **The cost is too high compared with what the block brings.** The agent then avoids the block even where it is the only way to finish. Already seen on this FIFO:
+   - After `BASELINE` reached 62–63 bins, the agent refused another random block for the last bins and repeated `WRITE` ×10, which can never hit them. It ran out of budget (cost 0.25 / 0.5 runs, §9 sweep).
+   - On a DUT where random blocks matter, that would leave coverage holes.
+   - In theory the closure bonus (+10 bins) outweighs a small cost, but the agent has to discover that first.
+2. **Exploration (the bigger problem).**
+   - Early in training the agent does not know yet which blocks are valuable. A cost makes it try random blocks less often, so it may never learn that they reach rare bins.
+   - The best plan still exists, but the agent becomes less likely to find it.
+   - This is a learning problem more than a maths problem, and it is exactly the failure that would hurt on a harder DUT.
+
+**A design point:** the cost changes the goal. The agent then optimizes "coverage minus a penalty for randomness" instead of "close coverage with few tests". On this FIFO that happens to point at the ideal plan; on another DUT it could point the wrong way. (In reinforcement-learning terms, it is reward shaping that is not guaranteed to keep the best plan unchanged.)
+
+**What we would do for a general method:**
+- **Charge for things that really cost something in verification, not for "being random".**
+  - Simulation time (`cycle_cost`) and the number of tests (`step_cost`, already 1 bin per test) are real costs on any DUT.
+  - Random blocks are usually longer, so they pay more under `cycle_cost`, but only in proportion to their length. If they reach bins nothing else can, they are still worth it.
+  - `cycle_cost` already exists and needs no code change. It is the more defensible choice for the report.
+- **If `random_block_cost` is used, treat it as a tuning knob and always check that closure does not drop.** A cost that lowers closure is blocking something needed.
+- **Optionally, start the cost at 0 and raise it during training** (a curriculum). The agent first learns what random blocks are good for, and only later learns to economize.
+
+**For the report:** present `random_block_cost` as an experiment on this FIFO. It shows that the agent can trade random traffic for directed tests when both cover the same bins. The general recommendation is a cost on real resources (cycles and tests).
 
 ## 10. Limits and follow-ups
 
