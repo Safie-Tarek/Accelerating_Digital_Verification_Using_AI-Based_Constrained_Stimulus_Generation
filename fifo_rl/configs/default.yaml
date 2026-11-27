@@ -34,6 +34,8 @@ campaign_budget: 30       # tests per campaign
 plan_max_len: 10          # blocks per plan before END_TEST is added (9 blocks can close 64/64)
 plan_history: 3           # last blocks one-hot in the state (64 + 3*9 + 2 = 93 numbers)
 cycle_cost: 0.0           # bins charged per simulated cycle (0: only the number of tests counts)
+random_block_cost: 0.0    # bins charged each time the agent picks one of random_blocks (0 = off)
+random_blocks: [BASELINE, RAND50]   # the constrained-random blocks: counted in the logs, and pay random_block_cost
 reward_mode: test         # test = step 1 (one report per test, reward on END_TEST); action = step 2
                           #   (one act_<idx> instance per block, each block rewarded for its first hits)
 n_campaigns: 3000         # training campaigns

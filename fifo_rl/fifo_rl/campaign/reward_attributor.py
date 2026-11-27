@@ -2,7 +2,7 @@
 
 Step 1 (this file): Questa gives ONE coverage report per test, so nobody knows which block hit
 which bin. The coverage reward of the whole test goes to the plan's last action (END_TEST):
-    reward[k]   = -cycle_cost * cycles_k * scale                   every planned action k
+    reward[k]   = -(cycle_cost * cycles_k + block_cost_k) * scale   every planned action k
     reward[END] += reward.compute_reward(new bins of the test, closed_now)
 compute_reward charges step_cost once, so one TEST costs one bin, exactly like one run did in the
 22-action design; with cycle_cost = 0 (default) the agent is judged on the number of tests. DQN
@@ -11,9 +11,13 @@ passes the END_TEST reward back to the blocks through the next states (raise gam
 Step 2 (ActionRewardAttributor): the report also has one act_<idx> instance per block, so each
 block gets the bins it was the FIRST to hit (blocks in idx order; bins covered by earlier tests
 count for nobody):
-    reward[k]   = scale * new_k - cycle_cost * cycles_k * scale
+    reward[k]   = scale * new_k - (cycle_cost * cycles_k + block_cost_k) * scale
     reward[END] = scale * (new bins only the test's reset cycle hit - step_cost + closure_bonus * [closed])
 The sum over the test is exactly the step-1 sum: only WHERE the reward lands changes.
+
+block_cost_k: a fixed price (in bins) each time block k is chosen, from block_costs (default: none).
+Used to make the constrained-random blocks (BASELINE, RAND50) less attractive without forbidding
+them: random_block_cost / random_blocks in configs/default.yaml.
 """
 
 from dataclasses import dataclass
@@ -36,15 +40,22 @@ class AttributionResult:
 class RewardAttributor:
     mode = "test"
 
-    def __init__(self, reward=RewardConfig(), cycle_cost=0.0):
+    def __init__(self, reward=RewardConfig(), cycle_cost=0.0, block_costs=None):
         """Input:  reward, the RewardConfig (step_cost per test, closure_bonus, scale);
-                cycle_cost, bins charged per simulated cycle of a block (>= 0).
+                cycle_cost, bins charged per simulated cycle of a block (>= 0);
+                block_costs, optional dict block id -> bins charged each time that block is
+                chosen (>= 0).
         Output: nothing.
         """
         if cycle_cost < 0:
             raise ValueError(f"cycle_cost must be >= 0, got {cycle_cost}")
+        block_costs = dict(block_costs or {})
+        bad = {k: v for k, v in block_costs.items() if v < 0}
+        if bad:
+            raise ValueError(f"block costs must be >= 0, got {bad}")
         self.reward = reward
         self.cycle_cost = cycle_cost
+        self.block_costs = block_costs
 
     def attribute(self, plan, test_hits, covered_before, action_hits=None):
         """Input:  plan, the closed StimulusPlan that was simulated;
@@ -74,8 +85,10 @@ class RewardAttributor:
         return test_hits, covered_before, new_bins, closed_now
 
     def _cycle_costs(self, plan):
-        """Input: the plan. Output: list with every planned action's cycle cost (negative or 0)."""
-        return [-self.cycle_cost * pa.spec.n_cycles * self.reward.scale for pa in plan.actions]
+        """Input: the plan. Output: list with every planned action's cost (negative or 0): its
+        cycles times cycle_cost, plus its block cost."""
+        return [-(self.cycle_cost * pa.spec.n_cycles + self.block_costs.get(pa.spec.id, 0.0)) * self.reward.scale
+                for pa in plan.actions]
 
 
 class ActionRewardAttributor(RewardAttributor):

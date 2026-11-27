@@ -30,7 +30,8 @@ Writes into --out (default runs/campaign/<mode>_<agent>_seed<seed>/, git-ignored
     tests.csv         one row per test: blocks, actions, cycles, new/total bins, reward, passed,
                       simulation / report / wall time (+ epsilon and loss while training; A2C also
                       policy_loss, value_loss and entropy of its last update in that test)
-    summary.json      closure rate, tests to close, cycles and wall time per campaign, action counts
+    summary.json      closure rate, tests to close, cycles and wall time per campaign, action counts,
+                      random_block_share (share of the chosen blocks that are random_blocks)
     eval.csv          (train) one row per evaluation
     last.pt, best.pt  (train) checkpoints; best = see score(): fewest expected tests (a campaign
                       that does not close counts as the full budget), then fewest cycles
@@ -65,9 +66,9 @@ VALIDATION_SEED_OFFSET = 1000
 EVAL_SEED_OFFSET = 2000
 TEST_FIELDS = ("phase", "agent", "reward_mode", "campaign", "test", "seed", "n_blocks", "actions", "forced_end",
                "cycles", "new_bins", "block_new_bins", "total_bins", "reward", "passed", "sim_time", "report_time",
-               "wall_time", "epsilon", "loss", "policy_loss", "value_loss", "entropy")
+               "wall_time", "epsilon", "loss", "policy_loss", "value_loss", "entropy", "n_random_blocks")
 EVAL_FIELDS = ("campaign", "step", "epsilon", "closure_rate", "tests_used_mean", "tests_to_close_mean",
-               "tests_charged_mean", "cycles_per_campaign_mean", "return_mean", "best")
+               "tests_charged_mean", "cycles_per_campaign_mean", "return_mean", "random_block_share", "best")
 A2C_STATS = ("policy_loss", "value_loss", "entropy")  # A2CAgent.last_stats keys logged per training test
 # settings a resumed agent keeps from its checkpoint unless the user gives them (see the module doc)
 RESUMABLE_KEYS = ("lr", "gamma", "batch_size", "learning_starts", "target_sync", "grad_clip", "buffer_capacity",
@@ -120,9 +121,10 @@ def make_runner(cfg, launcher, name, seed_offset):
     return CampaignRunner(config, launcher)
 
 
-def row_for_test(phase, agent_name, summary, epsilon=None, losses=(), stats=None):
-    """Input: phase name, agent name, a TestSummary, epsilon, the test's learn() losses, and the
-           agent's last_stats (A2C only, given when the test had an update). Output: a CSV row."""
+def row_for_test(phase, agent_name, summary, epsilon=None, losses=(), stats=None, random_names=()):
+    """Input: phase name, agent name, a TestSummary, epsilon, the test's learn() losses, the
+           agent's last_stats (A2C only, given when the test had an update), and the names of the
+           random blocks (cfg random_blocks). Output: a CSV row."""
     stats = stats or {}
     plan, out = summary.plan, summary.output
     return {"phase": phase, "agent": agent_name, "reward_mode": summary.attribution.mode,
@@ -137,15 +139,17 @@ def row_for_test(phase, agent_name, summary, epsilon=None, losses=(), stats=None
             "sim_time": round(out.sim_time, 4), "report_time": round(out.report_time, 4),
             "wall_time": round(out.wall_time, 4), "epsilon": "" if epsilon is None else round(epsilon, 4),
             "loss": round(statistics.fmean(losses), 6) if losses else "",
-            **{k: round(stats[k], 6) if k in stats else "" for k in A2C_STATS}}
+            **{k: round(stats[k], 6) if k in stats else "" for k in A2C_STATS},
+            "n_random_blocks": sum(pa.spec.name in random_names for pa in plan.actions)}
 
 
 def _stats(values):
     return {"mean": statistics.fmean(values), "median": statistics.median(values)} if values else None
 
 
-def summarize(results, budget=None):
-    """Input: a list of CampaignResult; budget, tests per campaign (campaign_budget).
+def summarize(results, budget=None, random_names=()):
+    """Input: a list of CampaignResult; budget, tests per campaign (campaign_budget); random_names,
+           the random blocks (cfg random_blocks) for random_block_share.
     Output: dict of campaign-level numbers (see the module doc). tests_charged = tests used by a
             campaign that closed, the full budget for one that did not (also one stopped early by a
             failed test); it is what score() ranks on. Without a budget it is None.
@@ -168,17 +172,25 @@ def summarize(results, budget=None):
         "sim_time_per_test_s": _stats([t.output.sim_time for t in tests]),
         "wall_time_per_campaign_s": _stats([r.wall_time for r in results]),
         "action_counts": {spec.name: counts.get(spec.name, 0) for spec in ACTIONS},
+        "random_block_share": random_share(counts, random_names),
     }
 
 
-def play(runner, agent, n_campaigns, writer, phase, agent_name):
-    """Input: runner, agent, number of campaigns, a csv writer, phase and agent names.
-    Output: list of CampaignResult (no learning; the agent plays as given).
+def random_share(counts, random_names):
+    """Input: block name -> times chosen, the random block names.
+    Output: share of the chosen blocks (END_TEST not counted) that are random blocks, 0.0 if none."""
+    chosen = sum(n for name, n in counts.items() if name != "END_TEST")
+    return sum(counts.get(name, 0) for name in random_names) / chosen if chosen else 0.0
+
+
+def play(runner, agent, n_campaigns, writer, phase, agent_name, random_names=()):
+    """Input: runner, agent, number of campaigns, a csv writer, phase and agent names, the random
+           block names (for the log). Output: list of CampaignResult (no learning; the agent plays as given).
     """
     results = []
     for _ in range(n_campaigns):
-        results.append(runner.run_campaign(
-            agent, on_test=lambda s, tr, ls: writer.writerow(row_for_test(phase, agent_name, s))))
+        results.append(runner.run_campaign(agent, on_test=lambda s, tr, ls: writer.writerow(
+            row_for_test(phase, agent_name, s, random_names=random_names))))
     return results
 
 
@@ -260,6 +272,7 @@ def train(cfg, out, agent_cls, launcher_kind="fake", verbose=True, resume=None, 
         resumed = {"resumed_from": str(resume), "resumed_at_step": agent.steps}
     save_config(cfg, out / "config.yaml")
     best, best_summary, eval_rows = None, None, []
+    randoms = tuple(cfg["random_blocks"] or ())
     with open(out / "tests.csv", "w", newline="") as f_tests, open(out / "eval.csv", "w", newline="") as f_eval:
         tests_writer = csv.DictWriter(f_tests, fieldnames=TEST_FIELDS)
         eval_writer = csv.DictWriter(f_eval, fieldnames=EVAL_FIELDS)
@@ -271,7 +284,8 @@ def train(cfg, out, agent_cls, launcher_kind="fake", verbose=True, resume=None, 
             nonlocal best, best_summary
             val_runner = make_runner(cfg, launcher, f"{out.name}_val", VALIDATION_SEED_OFFSET)
             summary = summarize(play(val_runner, GreedyWrapper(agent), cfg["eval_campaigns"],
-                                     tests_writer, "validation", agent.name), cfg["campaign_budget"])
+                                     tests_writer, "validation", agent.name, randoms),
+                                cfg["campaign_budget"], randoms)
             is_best = best is None or score(summary) > best
             if is_best:
                 best, best_summary = score(summary), summary
@@ -286,7 +300,8 @@ def train(cfg, out, agent_cls, launcher_kind="fake", verbose=True, resume=None, 
                    "tests_to_close_mean": summary["tests_to_close"]["mean"] if summary["tests_to_close"] else "",
                    "tests_charged_mean": summary["tests_charged"]["mean"],
                    "cycles_per_campaign_mean": summary["cycles_per_campaign"]["mean"],
-                   "return_mean": summary["return"]["mean"], "best": int(is_best)}
+                   "return_mean": summary["return"]["mean"],
+                   "random_block_share": round(summary["random_block_share"], 4), "best": int(is_best)}
             eval_writer.writerow(row)
             f_eval.flush()
             f_tests.flush()
@@ -301,7 +316,8 @@ def train(cfg, out, agent_cls, launcher_kind="fake", verbose=True, resume=None, 
         for campaign in range(cfg["n_campaigns"]):
             runner.run_campaign(agent, train=True, train_freq=cfg["train_freq"], on_test=lambda s, tr, ls: (
                 tests_writer.writerow(row_for_test("train", agent.name, s, agent.epsilon, ls,
-                                                   getattr(agent, "last_stats", None) if ls else None))))
+                                                   getattr(agent, "last_stats", None) if ls else None,
+                                                   randoms))))
             if (campaign + 1) % cfg["eval_every"] == 0 or campaign + 1 == cfg["n_campaigns"]:
                 validate(campaign + 1)
     return {"best": best_summary, "steps": agent.steps, "eval": eval_rows}
@@ -320,8 +336,9 @@ def evaluate(cfg, out, agent, launcher_kind="fake"):
     with open(out / "tests.csv", "w", newline="") as f_tests:
         writer = csv.DictWriter(f_tests, fieldnames=TEST_FIELDS)
         writer.writeheader()
-        summary = summarize(play(runner, agent, cfg["eval_campaigns"], writer, "eval", agent.name),
-                            cfg["campaign_budget"])
+        randoms = tuple(cfg["random_blocks"] or ())
+        summary = summarize(play(runner, agent, cfg["eval_campaigns"], writer, "eval", agent.name, randoms),
+                            cfg["campaign_budget"], randoms)
     summary = {"agent": agent.name, "launcher": launcher_kind, "reward_mode": cfg["reward_mode"], "seed": cfg["seed"],
                **summary}
     (out / "summary.json").write_text(json.dumps(summary, indent=1))

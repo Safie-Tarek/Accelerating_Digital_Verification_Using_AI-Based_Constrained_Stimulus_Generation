@@ -435,3 +435,73 @@ def test_plot_campaign_draws_the_a2c_run(tmp_path, monkeypatch):
         run_campaign.train(a2c_small_cfg(seed=seed), tmp_path / f"a2c{seed}", A2CAgent, verbose=False)
     plot_campaign.main([str(tmp_path / "a2c0"), str(tmp_path / "a2c1"), "--out", str(tmp_path / "plots")])
     assert (tmp_path / "plots" / "validation.png").is_file() and (tmp_path / "plots" / "a2c_losses.png").is_file()
+
+
+# ---------- random block cost (random_block_cost / random_blocks) ----------
+
+BASELINE_ID, RAND50_ID = ACTION_INDEX["BASELINE"], ACTION_INDEX["RAND50"]
+NO_REWARD = RewardConfig(step_cost=0, closure_bonus=0, scale=1)
+
+
+def test_block_cost_charges_only_the_named_blocks():
+    plan = plan_of(BASELINE_ID, WRITE, RAND50_ID, END_TEST_ID)
+    res = RewardAttributor(NO_REWARD, block_costs={BASELINE_ID: 0.5, RAND50_ID: 0.5}).attribute(plan, bins(), bins())
+    assert res.rewards == (-0.5, 0.0, -0.5, 0.0)
+
+
+def test_block_cost_adds_to_the_cycle_cost_in_step_2():
+    from fifo_rl.campaign.reward_attributor import ActionRewardAttributor
+    plan = plan_of(BASELINE_ID, WRITE, END_TEST_ID)
+    hits = np.array([bins(1, 2), bins(3)])
+    res = ActionRewardAttributor(NO_REWARD, cycle_cost=0.1, block_costs={BASELINE_ID: 1.0}).attribute(
+        plan, bins(1, 2, 3), bins(), hits)
+    assert res.rewards == pytest.approx((2 - 0.1 * 18 - 1.0, 1 - 0.1 * 10, 0.0))
+    assert res.block_new_bins == (2, 1)  # the coverage numbers are not changed by the cost
+
+
+def test_zero_cost_gives_exactly_todays_rewards():
+    plan = plan_of(BASELINE_ID, RAND50_ID, END_TEST_ID)
+    before = RewardAttributor().attribute(plan, bins(0, 1, 2), bins(0))
+    after = RewardAttributor(block_costs={BASELINE_ID: 0.0, RAND50_ID: 0.0}).attribute(plan, bins(0, 1, 2), bins(0))
+    assert before.rewards == after.rewards
+
+
+def test_negative_block_cost_is_refused():
+    with pytest.raises(ValueError, match="block costs"):
+        RewardAttributor(block_costs={BASELINE_ID: -1.0})
+
+
+def test_config_keys_become_block_costs():
+    from fifo_rl.campaign.campaign_runner import random_block_costs
+    cfg = load_config()
+    assert cfg["random_block_cost"] == 0.0 and cfg["random_blocks"] == ["BASELINE", "RAND50"]
+    assert random_block_costs(cfg) == {BASELINE_ID: 0.0, RAND50_ID: 0.0}
+    assert random_block_costs({**cfg, "random_block_cost": 0.5}) == {BASELINE_ID: 0.5, RAND50_ID: 0.5}
+    with pytest.raises(ValueError, match="unknown block"):
+        random_block_costs({**cfg, "random_blocks": ["BASELIN"]})
+    assert RunConfig.from_cfg({**cfg, "random_block_cost": 0.25}).block_costs[RAND50_ID] == 0.25
+
+
+def test_runner_charges_the_cost_and_logs_the_random_blocks(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    plan = [BASELINE_ID, BASELINE_ID, END_TEST_ID]
+    rewards = {}
+    for cost in (0.0, 1.0):
+        cfg = load_config(overrides={"random_block_cost": cost, "campaign_budget": 1})
+        r = CampaignRunner(RunConfig.from_cfg(cfg, run_root=tmp_path / f"c{cost}"), FakeLauncher())
+        agent = ScriptedAgent(plan)
+        r.run_campaign(agent, train=True)
+        rewards[cost] = [rw for _, rw, _ in agent.observed]
+    assert rewards[1.0][0] == pytest.approx(rewards[0.0][0] - 1 / 64)  # one block = cost x scale (1/64)
+    assert rewards[1.0][2] == pytest.approx(rewards[0.0][2])           # END_TEST is not a random block
+
+
+def test_script_logs_random_block_share(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run_campaign.main(["eval", "--agent", "baseline", "--eval-campaigns", "2", "--campaign-budget", "4",
+                       "--out", str(tmp_path / "ev")])
+    summary = json.loads((tmp_path / "ev" / "summary.json").read_text())
+    assert summary["random_block_share"] == 1.0  # always BASELINE
+    assert all(r["n_random_blocks"] == r["n_blocks"] for r in rows(tmp_path / "ev" / "tests.csv"))
+    run_campaign.train(small_cfg(), tmp_path / "tr", StubAgent, verbose=False)
+    assert all(r["random_block_share"] for r in rows(tmp_path / "tr" / "eval.csv"))

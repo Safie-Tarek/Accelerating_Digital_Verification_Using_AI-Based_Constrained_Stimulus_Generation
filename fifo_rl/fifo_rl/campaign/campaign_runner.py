@@ -28,7 +28,7 @@ from fifo_rl.campaign.campaign_store import CampaignStore, TestSummary
 from fifo_rl.campaign.reward_attributor import ActionRewardAttributor, RewardAttributor
 from fifo_rl.campaign.trajectory_builder import TrajectoryBuilder
 from fifo_rl.launchers.base import SimulationError
-from fifo_rl.plan.actions import N_ACTIONS
+from fifo_rl.plan.actions import ACTION_INDEX, N_ACTIONS
 from fifo_rl.plan.plan_builder import PlanBuilder
 from fifo_rl.plan.plan_file import TextPlanWriter
 from fifo_rl.plan.state_encoder import StateEncoder
@@ -37,12 +37,25 @@ from fifo_rl.questa.result_parser import ResultParser
 from fifo_rl.reward import RewardConfig
 
 
+def random_block_costs(cfg):
+    """Input: the config dict. Output: dict block id -> random_block_cost for every block named in
+    random_blocks (cost 0.0 when the cost is off: the blocks are still known, for the logs).
+    Logic: an unknown block name is an error (a typo would otherwise silently charge nothing).
+    """
+    names = cfg.get("random_blocks") or []
+    unknown = [n for n in names if n not in ACTION_INDEX]
+    if unknown:
+        raise ValueError(f"random_blocks: unknown block(s) {unknown}; known: {sorted(ACTION_INDEX)}")
+    return {ACTION_INDEX[n]: float(cfg.get("random_block_cost", 0.0)) for n in names}
+
+
 @dataclass(frozen=True)
 class RunConfig:
     campaign_budget: int = 30          # tests per campaign (= one DQN episode)
     plan_max_len: int = 10             # blocks per plan before END_TEST is added
     n_history: int = 3                 # last blocks shown in the state
     cycle_cost: float = 0.0            # bins charged per simulated cycle
+    block_costs: dict = field(default_factory=dict)   # block id -> bins charged per use (the random blocks)
     base_seed: int = 0                 # every test's seed comes from (base_seed, campaign, test)
     run_root: Path = field(default=Path("runs/campaign/sims"))
     keep_runs: bool = False            # True: one folder per test; False: one folder reused
@@ -56,7 +69,7 @@ class RunConfig:
         """
         values = dict(campaign_budget=cfg["campaign_budget"], plan_max_len=cfg["plan_max_len"],
                       n_history=cfg["plan_history"], cycle_cost=cfg["cycle_cost"], base_seed=cfg["seed"],
-                      reward_mode=cfg.get("reward_mode", "test"))
+                      reward_mode=cfg.get("reward_mode", "test"), block_costs=random_block_costs(cfg))
         values.update(overrides)
         return cls(**values)
 
@@ -111,7 +124,7 @@ class CampaignRunner:
         attributors = {"test": RewardAttributor, "action": ActionRewardAttributor}
         if config.reward_mode not in attributors:
             raise ValueError(f"reward_mode must be 'test' or 'action', got {config.reward_mode!r}")
-        self.attributor = attributors[config.reward_mode](reward, config.cycle_cost)
+        self.attributor = attributors[config.reward_mode](reward, config.cycle_cost, config.block_costs)
         self.traj_builder = TrajectoryBuilder()
         self.store = CampaignStore(config.campaign_budget)
         self.campaign = -1

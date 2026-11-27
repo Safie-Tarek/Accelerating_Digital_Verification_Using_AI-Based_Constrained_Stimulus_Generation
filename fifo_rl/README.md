@@ -91,6 +91,17 @@ python -m scripts.run_campaign eval --agent dqn --checkpoint runs/campaign/train
 python -m scripts.run_campaign eval --agent dqn --checkpoint <best.pt> --launcher questa --eval-campaigns 3
 ```
 
+**Cost on the random blocks** (`random_block_cost`, `random_blocks` in `configs/default.yaml`).
+- Each time the agent picks one of `random_blocks` (default `BASELINE` and `RAND50`, the constrained-random blocks), that block's reward is lowered by `random_block_cost` bins (× `scale`). The cost is charged in `RewardAttributor`, next to `cycle_cost`, for step 1 and step 2.
+- Default 0: rewards are exactly as before.
+- The blocks stay allowed, so the agent decides by itself whether random traffic is worth the price.
+- `tests.csv` has `n_random_blocks` per test, and `eval.csv` / `summary.json` have `random_block_share`, the share of the chosen blocks that are random.
+- Background and results: `../docs/trial_a2c_without_baseline.md` §9.
+
+```bash
+python -m scripts.run_campaign train --agent a2c --reward-mode action --gamma 0.99 --random-block-cost 0.5
+```
+
 **Go on training a saved agent** instead of starting from a new one:
 
 ```bash
